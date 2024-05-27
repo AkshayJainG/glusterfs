@@ -1215,7 +1215,6 @@ static int32_t
 svs_releasedir(xlator_t *this, fd_t *fd)
 {
     svs_fd_t *sfd = NULL;
-    uint64_t tmp_pfd = 0;
     int ret = 0;
     svs_inode_t *svs_inode = NULL;
     glfs_t *fs = NULL;
@@ -1224,9 +1223,10 @@ svs_releasedir(xlator_t *this, fd_t *fd)
     GF_VALIDATE_OR_GOTO("snapview-server", this, out);
     GF_VALIDATE_OR_GOTO(this->name, fd, out);
 
-    ret = fd_ctx_del(fd, this, &tmp_pfd);
-    if (ret < 0) {
+    sfd = fd_ctx_del_ptr(fd, this);
+    if (!sfd) {
         gf_msg_debug(this->name, 0, "pfd from fd=%p is NULL", fd);
+        ret = -1;
         goto out;
     }
 
@@ -1237,9 +1237,8 @@ svs_releasedir(xlator_t *this, fd_t *fd)
         fs = svs_inode->fs; /* should inode->lock be held for this? */
         SVS_CHECK_VALID_SNAPSHOT_HANDLE(fs, this);
         if (fs) {
-            sfd = (svs_fd_t *)(long)tmp_pfd;
             if (sfd->fd) {
-                ret = glfs_closedir(sfd->fd);
+                ret = glfs_close(sfd->fd);
                 if (ret)
                     gf_msg(this->name, GF_LOG_WARNING, errno,
                            SVS_MSG_RELEASEDIR_FAILED,
@@ -1261,7 +1260,6 @@ svs_flush(call_frame_t *frame, xlator_t *this, fd_t *fd, dict_t *xdata)
 {
     int32_t op_ret = -1;
     int32_t op_errno = 0;
-    int ret = -1;
     uint64_t value = 0;
     svs_inode_t *inode_ctx = NULL;
     call_stack_t *root = NULL;
@@ -1289,14 +1287,15 @@ svs_flush(call_frame_t *frame, xlator_t *this, fd_t *fd, dict_t *xdata)
         goto out;
     }
 
-    ret = fd_ctx_get(fd, this, &value);
-    if (ret < 0 && inode_ctx->type != SNAP_VIEW_ENTRY_POINT_INODE) {
-        op_errno = EINVAL;
-        gf_msg(this->name, GF_LOG_WARNING, op_errno,
-               SVS_MSG_GET_FD_CONTEXT_FAILED, "pfd is NULL on fd=%p", fd);
-        goto out;
+    if (inode_ctx->type != SNAP_VIEW_ENTRY_POINT_INODE) {
+        value = fd_ctx_get(fd, this);
+        if (!value) {
+            op_errno = EINVAL;
+            gf_msg(this->name, GF_LOG_WARNING, op_errno,
+                   SVS_MSG_GET_FD_CONTEXT_FAILED, "pfd is NULL on fd=%p", fd);
+            goto out;
+        }
     }
-
     op_ret = 0;
 
 out:
@@ -1309,7 +1308,6 @@ static int32_t
 svs_release(xlator_t *this, fd_t *fd)
 {
     svs_fd_t *sfd = NULL;
-    uint64_t tmp_pfd = 0;
     int ret = 0;
     inode_t *inode = NULL;
     svs_inode_t *svs_inode = NULL;
@@ -1318,9 +1316,10 @@ svs_release(xlator_t *this, fd_t *fd)
     GF_VALIDATE_OR_GOTO("snapview-server", this, out);
     GF_VALIDATE_OR_GOTO(this->name, fd, out);
 
-    ret = fd_ctx_del(fd, this, &tmp_pfd);
-    if (ret < 0) {
+    sfd = fd_ctx_del_ptr(fd, this);
+    if (!sfd) {
         gf_msg_debug(this->name, 0, "pfd from fd=%p is NULL", fd);
+        ret = -1;
         goto out;
     }
 
@@ -1331,7 +1330,6 @@ svs_release(xlator_t *this, fd_t *fd)
         fs = svs_inode->fs; /* should inode->lock be held for this? */
         SVS_CHECK_VALID_SNAPSHOT_HANDLE(fs, this);
         if (fs) {
-            sfd = (svs_fd_t *)(long)tmp_pfd;
             if (sfd->fd) {
                 ret = glfs_close(sfd->fd);
                 if (ret)
@@ -1404,7 +1402,8 @@ out:
 }
 
 static int
-svs_fill_readdir(xlator_t *this, gf_dirent_t *entries, size_t size, off_t off)
+svs_fill_readdir(xlator_t *this, gf_dirent_t *entries, int32_t *op_errno,
+                 size_t size, off_t off)
 {
     gf_dirent_t *entry = NULL;
     svs_private_t *priv = NULL;
@@ -1456,6 +1455,10 @@ svs_fill_readdir(xlator_t *this, gf_dirent_t *entries, size_t size, off_t off)
     }
 unlock:
     UNLOCK(&priv->snaplist_lock);
+
+    if (count == 0) {
+        *op_errno = ENOENT;
+    }
 
 out:
     return count;
@@ -1578,7 +1581,8 @@ svs_readdirp_fill(xlator_t *this, inode_t *parent, svs_inode_t *parent_ctx,
     GF_VALIDATE_OR_GOTO(this->name, parent_ctx, out);
     GF_VALIDATE_OR_GOTO(this->name, entry, out);
 
-    if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+    /* skip . and .. */
+    if (inode_dir_or_parentdir(entry))
         goto out;
 
     inode = inode_grep(parent->table, parent, entry->d_name);
@@ -1677,12 +1681,14 @@ svs_readdirp(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
     svs_fd_t *svs_fd = NULL;
     call_stack_t *root = NULL;
 
+    /* Initialize list ptr before GF_VALIDATE to avoid coverity
+       warning
+     */
+    INIT_LIST_HEAD(&entries.list);
     GF_VALIDATE_OR_GOTO("snap-view-daemon", this, unwind);
     GF_VALIDATE_OR_GOTO(this->name, frame, unwind);
     GF_VALIDATE_OR_GOTO(this->name, fd, unwind);
     GF_VALIDATE_OR_GOTO(this->name, fd->inode, unwind);
-
-    INIT_LIST_HEAD(&entries.list);
 
     root = frame->root;
     op_ret = gf_setcredentials(&root->uid, &root->gid, root->ngrps,
@@ -1706,7 +1712,7 @@ svs_readdirp(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
     if (parent_ctx->type == SNAP_VIEW_ENTRY_POINT_INODE) {
         LOCK(&fd->lock);
         {
-            count = svs_fill_readdir(this, &entries, size, off);
+            count = svs_fill_readdir(this, &entries, &op_errno, size, off);
         }
         UNLOCK(&fd->lock);
 
@@ -1798,7 +1804,7 @@ svs_readdir(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
     if (inode_ctx->type == SNAP_VIEW_ENTRY_POINT_INODE) {
         LOCK(&fd->lock);
         {
-            count = svs_fill_readdir(this, &entries, size, off);
+            count = svs_fill_readdir(this, &entries, &op_errno, size, off);
         }
         UNLOCK(&fd->lock);
     } else {
@@ -2213,42 +2219,45 @@ svs_open(call_frame_t *frame, xlator_t *this, loc_t *loc, int32_t flags,
         goto out;
     }
 
-    if (inode_ctx->type == SNAP_VIEW_ENTRY_POINT_INODE)
-        GF_ASSERT(0);  // on entry point it should always be opendir
-
-    SVS_GET_INODE_CTX_INFO(inode_ctx, fs, object, this, loc, op_ret, op_errno,
-                           out);
-
-    op_ret = gf_setcredentials(&root->uid, &root->gid, root->ngrps,
-                               root->groups);
-    if (op_ret != 0) {
+    if (inode_ctx->type == SNAP_VIEW_ENTRY_POINT_INODE) {
+        op_ret = 0;
+        op_errno = 0;
         goto out;
-    }
+    } else {
+        SVS_GET_INODE_CTX_INFO(inode_ctx, fs, object, this, loc, op_ret,
+                               op_errno, out);
 
-    glfd = glfs_h_open(fs, object, flags);
-    if (!glfd) {
-        op_ret = -1;
-        op_errno = errno;
-        gf_msg(this->name, GF_LOG_ERROR, op_errno, SVS_MSG_OPEN_FAILED,
-               "glfs_h_open on %s failed (gfid: %s)", loc->name,
-               uuid_utoa(loc->inode->gfid));
-        goto out;
-    }
+        op_ret = gf_setcredentials(&root->uid, &root->gid, root->ngrps,
+                                   root->groups);
+        if (op_ret != 0) {
+            goto out;
+        }
 
-    sfd = svs_fd_ctx_get_or_new(this, fd);
-    if (!sfd) {
-        op_ret = -1;
-        op_errno = ENOMEM;
-        gf_msg(this->name, GF_LOG_ERROR, op_errno, SVS_MSG_NO_MEMORY,
-               "failed to allocate fd context "
-               "for %s (gfid: %s)",
-               loc->name, uuid_utoa(loc->inode->gfid));
-        glfs_close(glfd);
-        goto out;
-    }
-    sfd->fd = glfd;
+        glfd = glfs_h_open(fs, object, flags);
+        if (!glfd) {
+            op_ret = -1;
+            op_errno = errno;
+            gf_msg(this->name, GF_LOG_ERROR, op_errno, SVS_MSG_OPEN_FAILED,
+                   "glfs_h_open on %s failed (gfid: %s)", loc->name,
+                   uuid_utoa(loc->inode->gfid));
+            goto out;
+        }
 
-    op_ret = 0;
+        sfd = svs_fd_ctx_get_or_new(this, fd);
+        if (!sfd) {
+            op_ret = -1;
+            op_errno = ENOMEM;
+            gf_msg(this->name, GF_LOG_ERROR, op_errno, SVS_MSG_NO_MEMORY,
+                   "failed to allocate fd context "
+                   "for %s (gfid: %s)",
+                   loc->name, uuid_utoa(loc->inode->gfid));
+            glfs_close(glfd);
+            goto out;
+        }
+        sfd->fd = glfd;
+
+        op_ret = 0;
+    }
 
 out:
     STACK_UNWIND_STRICT(open, frame, op_ret, op_errno, fd, NULL);

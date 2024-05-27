@@ -344,7 +344,7 @@ gf_mallinfo(gf_mallinfo_t *info)
 #endif /* HAVE_MALLINFO2 */
 
 void
-gf_proc_dump_mem_info()
+gf_proc_dump_mem_info(void)
 {
 #if defined(HAVE_MALLINFO2) || defined(HAVE_MALLINFO)
     gf_mallinfo_t info;
@@ -636,7 +636,7 @@ gf_proc_dump_oldgraph_xlator_info(xlator_t *top)
 }
 
 static int
-gf_proc_dump_enable_all_options()
+gf_proc_dump_enable_all_options(void)
 {
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_mem, _gf_true);
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_iobuf, _gf_true);
@@ -652,7 +652,7 @@ gf_proc_dump_enable_all_options()
 }
 
 gf_boolean_t
-is_gf_proc_dump_all_disabled()
+is_gf_proc_dump_all_disabled(void)
 {
     gf_boolean_t all_disabled = _gf_true;
 
@@ -680,7 +680,7 @@ out:
    file exists and it is emtpty
 */
 static int
-gf_proc_dump_enable_default_options()
+gf_proc_dump_enable_default_options(void)
 {
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_mem, _gf_true);
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_callpool, _gf_true);
@@ -689,7 +689,7 @@ gf_proc_dump_enable_default_options()
 }
 
 static int
-gf_proc_dump_disable_all_options()
+gf_proc_dump_disable_all_options(void)
 {
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_mem, _gf_false);
     GF_PROC_DUMP_SET_OPTION(dump_options.dump_iobuf, _gf_false);
@@ -761,7 +761,7 @@ out:
 }
 
 static int
-gf_proc_dump_options_init()
+gf_proc_dump_options_init(void)
 {
     int ret = -1;
     FILE *fp = NULL;
@@ -915,18 +915,14 @@ gf_proc_dump_info(int signum, glusterfs_ctx_t *ctx)
     // continue even though gettimeofday() has failed
     ret = gettimeofday(&tv, NULL);
     if (0 == ret) {
-        gf_time_fmt_tv_FT(timestr, sizeof timestr, &tv, ctx);
+        gf_time_fmt_tv_FT(timestr, sizeof timestr, &tv, &ctx->log);
         len = snprintf(sign_string, sizeof(sign_string),
                        "DUMP-START-TIME: %s\n", timestr);
 
         // swallow the errors of write for start and end marker
         (void)sys_write(gf_dump_fd, sign_string, len);
     }
-
-    if (GF_PROC_DUMP_IS_OPTION_ENABLED(mem)) {
-        gf_proc_dump_mem_info();
-        gf_proc_dump_mempool_info(ctx);
-    }
+    gf_proc_dump_mempool_info(ctx);
 
     if (GF_PROC_DUMP_IS_OPTION_ENABLED(iobuf))
         iobuf_stats_dump(ctx->iobuf_pool);
@@ -961,7 +957,7 @@ gf_proc_dump_info(int signum, glusterfs_ctx_t *ctx)
 
     ret = gettimeofday(&tv, NULL);
     if (0 == ret) {
-        gf_time_fmt_tv_FT(timestr, sizeof timestr, &tv, ctx);
+        gf_time_fmt_tv_FT(timestr, sizeof timestr, &tv, &ctx->log);
         len = snprintf(sign_string, sizeof(sign_string), "\nDUMP-END-TIME: %s",
                        timestr);
         (void)sys_write(gf_dump_fd, sign_string, len);
@@ -989,7 +985,7 @@ gf_proc_dump_fini(void)
 }
 
 void
-gf_proc_dump_init()
+gf_proc_dump_init(void)
 {
     pthread_mutex_init(&gf_proc_dump_mutex, NULL);
 

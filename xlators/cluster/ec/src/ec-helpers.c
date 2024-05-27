@@ -87,18 +87,6 @@ ec_trace(const char *event, ec_fop_data_t *fop, const char *fmt, ...)
     }
 }
 
-int32_t
-ec_bits_consume(uint64_t *n)
-{
-    uint64_t tmp;
-
-    tmp = *n;
-    tmp &= -tmp;
-    *n ^= tmp;
-
-    return gf_bits_index(tmp);
-}
-
 size_t
 ec_iov_copy_to(void *dst, struct iovec *vector, int32_t count, off_t offset,
                size_t size)
@@ -755,7 +743,8 @@ __ec_fd_get(fd_t *fd, xlator_t *xl)
     uint64_t value = 0;
     ec_t *ec = xl->private;
 
-    if ((__fd_ctx_get(fd, xl, &value) != 0) || (value == 0)) {
+    ctx = __fd_ctx_get_ptr(fd, xl);
+    if (!ctx) {
         ctx = GF_MALLOC(sizeof(*ctx) + (sizeof(ec_fd_status_t) * ec->nodes),
                         ec_mt_ec_fd_t);
         if (ctx != NULL) {
@@ -781,8 +770,6 @@ __ec_fd_get(fd_t *fd, xlator_t *xl)
                 ctx->bad_version = ictx->bad_version;
             }
         }
-    } else {
-        ctx = (ec_fd_t *)(uintptr_t)value;
     }
 
     /* Treat anonymous fd specially */
@@ -826,22 +813,6 @@ ec_filter_internal_xattrs(dict_t *xattr)
                        dict_remove_foreach_fn, NULL);
 }
 
-gf_boolean_t
-ec_is_data_fop(glusterfs_fop_t fop)
-{
-    switch (fop) {
-        case GF_FOP_WRITE:
-        case GF_FOP_TRUNCATE:
-        case GF_FOP_FTRUNCATE:
-        case GF_FOP_FALLOCATE:
-        case GF_FOP_DISCARD:
-        case GF_FOP_ZEROFILL:
-            return _gf_true;
-        default:
-            return _gf_false;
-    }
-    return _gf_false;
-}
 /*
 gf_boolean_t
 ec_is_metadata_fop (int32_t lock_kind, glusterfs_fop_t fop)

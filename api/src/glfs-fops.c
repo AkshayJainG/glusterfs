@@ -1,4 +1,3 @@
-
 /*
   Copyright (c) 2012-2018 Red Hat, Inc. <http://www.redhat.com>
   This file is part of GlusterFS.
@@ -21,6 +20,7 @@
 #include "glfs.h"
 #include "gfapi-messages.h"
 #include <glusterfs/compat-errno.h>
+#include <glusterfs/common-utils.h>
 #include <limits.h>
 #include "glusterfs3.h"
 
@@ -475,7 +475,11 @@ retry:
     if (ret)
         gf_msg_debug("gfapi", 0, "Getting leaseid from thread failed");
 
-    ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
+    if (IA_ISDIR(iatt.ia_type))
+        ret = syncop_opendir(subvol, &loc, glfd->fd, NULL, NULL);
+    else
+        ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
+
     DECODE_SYNCOP_ERR(ret);
 
     ESTALE_RETRY(ret, errno, reval, &loc, retry);
@@ -662,13 +666,19 @@ pub_glfs_openat(struct glfs_fd *pglfd, const char *path, int flags, mode_t mode)
     if (ret)
         gf_msg_debug("gfapi", 0, "Getting leaseid from thread failed");
 
-    if (!is_create)
-        ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
-    else
+    if (!is_create) {
+        if (IA_ISDIR(iatt.ia_type))
+            ret = syncop_opendir(subvol, &loc, glfd->fd, NULL, NULL);
+        else
+            ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
+    } else
         ret = syncop_create(subvol, &loc, flags, mode, glfd->fd, &iatt,
                             fop_attr, NULL);
 
     DECODE_SYNCOP_ERR(ret);
+
+    if (is_create && ret == 0)
+        ret = glfs_loc_link(&loc, &iatt);
 
     /* Because it is openat(), no ESTALE expected */
 out:
@@ -703,6 +713,7 @@ pub_glfs_close(struct glfs_fd *glfd)
     DECLARE_OLD_THIS;
     __GLFS_ENTRY_VALIDATE_FD(glfd, invalid_fs);
 
+    gf_dirent_free(list_entry(&glfd->entries, gf_dirent_t, list));
     subvol = glfs_active_subvol(glfd->fs);
     if (!subvol) {
         ret = -1;
@@ -832,8 +843,6 @@ int
 pub_glfs_fstatat(struct glfs_fd *pglfd, const char *path, struct stat *stat,
                  int flags)
 {
-    /* TODO: Add support for 'AT_EMPTY_PATH' flag */
-
     int ret = -1;
     xlator_t *subvol = NULL;
     loc_t loc = {
@@ -843,9 +852,13 @@ pub_glfs_fstatat(struct glfs_fd *pglfd, const char *path, struct stat *stat,
         0,
     };
     int reval = 0;
+    int is_path_empty = 0;
 
     DECLARE_OLD_THIS;
     __GLFS_ENTRY_VALIDATE_FD(pglfd, invalid_fs);
+    fd_t *fd = NULL;
+
+    is_path_empty = (flags & AT_EMPTY_PATH) == AT_EMPTY_PATH;
 
 retry:
     /* Retry case */
@@ -853,8 +866,30 @@ retry:
         cleanup_fopat_args(pglfd, subvol, ret, &loc);
     }
 
-    subvol = setup_fopat_args(pglfd, path, !(flags & AT_SYMLINK_NOFOLLOW), &loc,
-                              &iatt, reval);
+    if (is_path_empty && path[0] == '\0') {
+        GF_REF_GET(pglfd);
+
+        subvol = glfs_active_subvol(pglfd->fs);
+        if (!subvol) {
+            ret = -1;
+            errno = EIO;
+            goto out;
+        }
+
+        fd = glfs_resolve_fd(pglfd->fs, subvol, pglfd);
+        if (!fd) {
+            ret = -1;
+            errno = EBADFD;
+            goto out;
+        }
+
+        ret = syncop_fstat(subvol, fd, &iatt, NULL, NULL);
+        DECODE_SYNCOP_ERR(ret);
+    } else {
+        subvol = setup_fopat_args(pglfd, path, !(flags & AT_SYMLINK_NOFOLLOW),
+                                  &loc, &iatt, reval);
+    }
+
     if (!subvol) {
         ret = -1;
     }
@@ -866,7 +901,7 @@ retry:
         goto out;
     }
 
-    if (!loc.inode) {
+    if (!loc.inode && !is_path_empty) {
         ret = -1;
         errno = ENOENT;
         goto out;
@@ -967,11 +1002,14 @@ pub_glfs_fstat(struct glfs_fd *glfd, struct stat *stat)
         goto out;
     }
 
-    ret = syncop_fstat(subvol, fd, &iatt, NULL, NULL);
+    if (stat) {
+        ret = syncop_fstat(subvol, fd, &iatt, NULL, NULL);
+        if (ret == 0)
+            glfs_iatt_to_stat(glfd->fs, &iatt, stat);
+    } else
+        ret = syncop_fstat(subvol, fd, NULL, NULL, NULL);
     DECODE_SYNCOP_ERR(ret);
 
-    if (ret == 0 && stat)
-        glfs_iatt_to_stat(glfd->fs, &iatt, stat);
 out:
     if (fd)
         fd_unref(fd);
@@ -1283,12 +1321,16 @@ glfs_preadv_common(struct glfs_fd *glfd, const struct iovec *iovec, int iovcnt,
     if (ret)
         gf_msg_debug("gfapi", 0, "Getting leaseid from thread failed");
 
-    ret = syncop_readv(subvol, fd, size, offset, 0, &iov, &cnt, &iobref, &iatt,
-                       fop_attr, NULL);
-    DECODE_SYNCOP_ERR(ret);
+    if (poststat) {
+        ret = syncop_readv(subvol, fd, size, offset, 0, &iov, &cnt, &iobref,
+                           &iatt, fop_attr, NULL);
+        if (ret >= 0)
+            glfs_iatt_to_statx(glfd->fs, &iatt, poststat);
+    } else
+        ret = syncop_readv(subvol, fd, size, offset, 0, &iov, &cnt, &iobref,
+                           NULL, fop_attr, NULL);
 
-    if (ret >= 0 && poststat)
-        glfs_iatt_to_statx(glfd->fs, &iatt, poststat);
+    DECODE_SYNCOP_ERR(ret);
 
     if (ret <= 0)
         goto out;
@@ -1406,7 +1448,6 @@ struct glfs_io {
     struct glfs_fd *glfd;
     int op;
     off_t offset;
-    struct iovec *iov;
     int count;
     int flags;
     gf_boolean_t oldcb;
@@ -1415,6 +1456,7 @@ struct glfs_io {
         glfs_io_cbk fn;
     };
     void *data;
+    struct iovec iov[];
 };
 
 static int
@@ -1482,7 +1524,6 @@ err:
      */
     GF_REF_PUT(glfd);
 
-    GF_FREE(gio->iov);
     GF_FREE(gio);
     STACK_DESTROY(frame->root);
     glfs_subvol_done(fs, subvol);
@@ -1544,7 +1585,8 @@ glfs_preadv_async_common(struct glfs_fd *glfd, const struct iovec *iovec,
         goto out;
     }
 
-    gio = GF_MALLOC(sizeof(*gio), glfs_mt_glfs_io_t);
+    gio = GF_MALLOC(sizeof(*gio) + (count * sizeof(struct iovec)),
+                    glfs_mt_glfs_io_t);
     if (!gio) {
         ret = -1;
         errno = ENOMEM;
@@ -1553,19 +1595,12 @@ glfs_preadv_async_common(struct glfs_fd *glfd, const struct iovec *iovec,
     gio->glfd = glfd;
     gio->op = GF_FOP_READ;
     gio->offset = offset;
-
-    gio->iov = iov_dup(iovec, count);
-    if (!gio->iov) {
-        ret = -1;
-        errno = ENOMEM;
-        goto out;
-    }
-
     gio->count = count;
     gio->flags = flags;
     gio->oldcb = oldcb;
     gio->fn = fn;
     gio->data = data;
+    memcpy(gio->iov, iovec, sizeof(struct iovec) * count);
 
     frame->local = gio;
 
@@ -1584,7 +1619,6 @@ out:
         if (glfd)
             GF_REF_PUT(glfd);
         if (gio) {
-            GF_FREE(gio->iov);
             GF_FREE(gio);
         }
         if (frame) {
@@ -2122,25 +2156,21 @@ glfs_pwritev_async_common(struct glfs_fd *glfd, const struct iovec *iovec,
         goto out;
     }
 
-    gio = GF_CALLOC(1, sizeof(*gio), glfs_mt_glfs_io_t);
-    if (!gio) {
+    gio = GF_MALLOC(sizeof(*gio) + (1 * (sizeof(struct iovec))),
+                    glfs_mt_glfs_io_t);
+    if (caa_unlikely(!gio)) {
         errno = ENOMEM;
         goto out;
     }
 
-    gio->op = GF_FOP_WRITE;
     gio->glfd = glfd;
+    gio->op = GF_FOP_WRITE;
     gio->offset = offset;
+    gio->count = 1;
     gio->flags = flags;
     gio->oldcb = oldcb;
     gio->fn = fn;
     gio->data = data;
-    gio->count = 1;
-    gio->iov = GF_CALLOC(gio->count, sizeof(*(gio->iov)), gf_common_mt_iovec);
-    if (!gio->iov) {
-        errno = ENOMEM;
-        goto out;
-    }
 
     ret = iobuf_copy(subvol->ctx->iobuf_pool, iovec, count, &iobref, &iobuf,
                      gio->iov);
@@ -3561,7 +3591,6 @@ pub_glfs_opendir(struct glfs *fs, const char *path)
     if (!glfd)
         goto out;
 
-    INIT_LIST_HEAD(&glfd->entries);
 retry:
     ret = glfs_resolve(fs, subvol, path, &loc, &iatt, reval);
 
@@ -3753,6 +3782,9 @@ glfs_discard_async_common(struct glfs_fd *glfd, off_t offset, size_t len,
 
     ret = 0;
 out:
+    if (fop_attr)
+        dict_unref(fop_attr);
+
     if (ret) {
         if (fd)
             fd_unref(fd);
@@ -3962,8 +3994,7 @@ glfd_entry_refresh(struct glfs_fd *glfd, int plus)
             {
                 if ((!entry->inode && (!IA_ISDIR(entry->d_stat.ia_type))) ||
                     ((entry->d_stat.ia_ctime == 0) &&
-                     strcmp(entry->d_name, ".") &&
-                     strcmp(entry->d_name, ".."))) {
+                     !inode_dir_or_parentdir(entry))) {
                     /* entry->inode for directories will be
                      * always set to null to force a lookup
                      * on the dentry. Hence to not degrade
@@ -5799,7 +5830,6 @@ glfs_recall_lease_fd(struct glfs *fs, struct gf_upcall *up_data)
     struct glfs_fd *tmp = NULL;
     struct list_head glfd_list;
     fd_t *fd = NULL;
-    uint64_t value = 0;
     struct glfs_lease lease = {
         0,
     };
@@ -5835,8 +5865,7 @@ glfs_recall_lease_fd(struct glfs *fs, struct gf_upcall *up_data)
     {
         list_for_each_entry(fd, &inode->fd_list, inode_list)
         {
-            ret = fd_ctx_get(fd, subvol, &value);
-            glfd = (struct glfs_fd *)(uintptr_t)value;
+            glfd = fd_ctx_get_ptr(fd, subvol);
             if (glfd) {
                 gf_msg_trace(THIS->name, 0, "glfd (%p) has held lease", glfd);
                 GF_REF_GET(glfd);
@@ -6771,7 +6800,7 @@ GFAPI_SYMVER_PUBLIC_DEFAULT(glfs_faccessat, 11.0)
 int
 pub_glfs_faccessat(struct glfs_fd *pglfd, const char *path, int mode, int flags)
 {
-    volatile int ret = -1;
+    int ret = -1;
     int reval = 0;
     xlator_t *subvol = NULL;
     loc_t loc = {
@@ -6882,8 +6911,6 @@ int
 pub_glfs_fchownat(struct glfs_fd *pglfd, const char *path, uid_t uid, gid_t gid,
                   int flags)
 {
-    /* TODO: Add support for 'AT_EMPTY_PATH' flag */
-
     int ret = 0;
     struct glfs_stat stat = {
         0,
@@ -6908,16 +6935,32 @@ pub_glfs_fchownat(struct glfs_fd *pglfd, const char *path, uid_t uid, gid_t gid,
     };
     int glvalid;
     int no_follow = 0;
+    int is_path_empty = 0;
 
     DECLARE_OLD_THIS;
     __GLFS_ENTRY_VALIDATE_FD(pglfd, invalid_fs);
 
     no_follow = (flags & AT_SYMLINK_NOFOLLOW) == AT_SYMLINK_NOFOLLOW;
-    subvol = setup_fopat_args(pglfd, path, !no_follow, &loc, &iatt, 0);
-    if (!subvol) {
-        ret = -1;
-        errno = EIO;
-        goto out;
+    is_path_empty = (flags & AT_EMPTY_PATH) == AT_EMPTY_PATH;
+
+    if (is_path_empty && path[0] == '\0') {
+        GF_REF_GET(pglfd);
+
+        subvol = glfs_active_subvol(pglfd->fs);
+        if (!subvol) {
+            ret = -1;
+            errno = EIO;
+            goto out;
+        }
+
+        fd_to_loc(pglfd, &loc);
+    } else {
+        subvol = setup_fopat_args(pglfd, path, !no_follow, &loc, &iatt, 0);
+        if (!subvol) {
+            ret = -1;
+            errno = EIO;
+            goto out;
+        }
     }
 
     if (!loc.inode) {
@@ -6948,8 +6991,6 @@ int
 pub_glfs_linkat(struct glfs_fd *oldpglfd, const char *oldpath,
                 struct glfs_fd *newpglfd, const char *newpath, int flags)
 {
-    /* TODO: Add support for 'AT_EMPTY_PATH' flag */
-
     int ret = -1;
     int reval = 0;
     xlator_t *oldsubvol = NULL;
@@ -6967,6 +7008,7 @@ pub_glfs_linkat(struct glfs_fd *oldpglfd, const char *oldpath,
         0,
     };
     int follow = 0;
+    int is_path_empty = 0;
 
     DECLARE_OLD_THIS;
     __GLFS_ENTRY_VALIDATE_FD(oldpglfd, invalid_fs);
@@ -6980,6 +7022,7 @@ pub_glfs_linkat(struct glfs_fd *oldpglfd, const char *oldpath,
        a new link created will be a symbolic link to defreferenced oldpath.
     */
     follow = (flags & AT_SYMLINK_FOLLOW) == AT_SYMLINK_FOLLOW;
+    is_path_empty = (flags & AT_EMPTY_PATH) == AT_EMPTY_PATH;
 
 retry:
     /* Retry case */
@@ -6987,13 +7030,33 @@ retry:
         cleanup_fopat_args(oldpglfd, oldsubvol, ret, &oldloc);
     }
 
-    oldsubvol = setup_fopat_args(oldpglfd, oldpath, follow, &oldloc, &oldiatt,
-                                 reval);
+    if (is_path_empty && oldpath[0] == '\0') {
+        GF_REF_GET(oldpglfd);
+
+        oldsubvol = glfs_active_subvol(oldpglfd->fs);
+        if (!oldsubvol) {
+            ret = -1;
+            errno = EIO;
+            goto out;
+        }
+
+        fd_to_loc(oldpglfd, &oldloc);
+
+        if (*&oldloc.inode->ia_type == IA_IFDIR) {
+            ret = -1;
+            errno = EISDIR;
+            goto out;
+        }
+    } else {
+        oldsubvol = setup_fopat_args(oldpglfd, oldpath, follow, &oldloc,
+                                     &oldiatt, reval);
+    }
+
     if (!oldsubvol) {
         ret = -1;
     }
 
-    ESTALE_RETRY(ret, errno, reval, &newloc, retry);
+    ESTALE_RETRY(ret, errno, reval, &oldloc, retry);
 
     if (!oldsubvol) {
         goto out;
@@ -7490,6 +7553,7 @@ pub_glfs_unlinkat(struct glfs_fd *pglfd, const char *path, int flags)
 {
     int ret = -1;
     int reval = 0;
+    int is_rmdir = 0;
     xlator_t *subvol = NULL;
     loc_t loc = {
         0,
@@ -7500,6 +7564,8 @@ pub_glfs_unlinkat(struct glfs_fd *pglfd, const char *path, int flags)
 
     DECLARE_OLD_THIS;
     __GLFS_ENTRY_VALIDATE_FD(pglfd, invalid_fs);
+
+    is_rmdir = (flags & AT_REMOVEDIR) == AT_REMOVEDIR;
 
 retry:
     /* Retry case */
@@ -7519,14 +7585,26 @@ retry:
         goto out;
     }
 
-    if (iatt.ia_type == IA_IFDIR) {
+    /* If a directory is to be unlinked then 'AT_REMOVEDIR'
+       is to be used mandatorily.
+    */
+    if (iatt.ia_type == IA_IFDIR && !is_rmdir) {
         ret = -1;
         errno = EISDIR;
+        goto out;
+    } else if (iatt.ia_type != IA_IFDIR && is_rmdir) {
+        ret = -1;
+        errno = ENOTDIR;
         goto out;
     }
 
     /* TODO: Add leaseid */
-    ret = syncop_unlink(subvol, &loc, NULL, NULL);
+    /* Unlink or rmdir based on 'AT_REMOVEDIR' flag */
+    if (!is_rmdir)
+        ret = syncop_unlink(subvol, &loc, NULL, NULL);
+    else
+        ret = syncop_rmdir(subvol, &loc, 0, NULL, NULL);
+
     DECODE_SYNCOP_ERR(ret);
 
     ESTALE_RETRY(ret, errno, reval, &loc, retry);

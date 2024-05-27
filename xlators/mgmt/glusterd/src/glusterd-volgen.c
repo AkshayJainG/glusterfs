@@ -4451,9 +4451,17 @@ client_graph_builder(volgen_graph_t *graph, glusterd_volinfo_t *volinfo,
     }
 
     ret = dict_get_str_boolean(set_dict, "server.manage-gids", _gf_false);
-    if (ret != -1) {
-        ret = dict_set_str_sizen(set_dict, "client.send-gids",
-                                 ret ? "false" : "true");
+    if (ret > 0) {
+        /* If manage-gids is enabled, it means that servers will take care of
+         * the user groups themselves. In this case it's useless to send the
+         * list from the client side because it will be ignored, so we disable
+         * send-gids option always.
+         *
+         * In case manage-gids is disabled, we cannot assume that the client
+         * needs to send the gids. It's possible to completely handle ACL
+         * checks in client side, so we don't touch the value of send-gids in
+         * this case. The user is free to enable or disable it. */
+        ret = dict_set_str_sizen(set_dict, "client.send-gids", "false");
         if (ret)
             gf_msg(THIS->name, GF_LOG_WARNING, -ret, GD_MSG_DICT_SET_FAILED,
                    "changing client"
@@ -6043,7 +6051,7 @@ build_bitd_volume_graph(volgen_graph_t *graph, glusterd_volinfo_t *volinfo,
 
     cds_list_for_each_entry(brickinfo, &volinfo->bricks, brick_list)
     {
-        if (!glusterd_is_local_brick(this, volinfo, brickinfo))
+        if (!glusterd_is_local_brick(volinfo, brickinfo))
             continue;
 
         xl = volgen_graph_build_client(&cgraph, volinfo, brickinfo->hostname,
@@ -6116,7 +6124,7 @@ build_bitd_graph(volgen_graph_t *graph, dict_t *mod_dict)
 
         cds_list_for_each_entry(brickinfo, &voliter->bricks, brick_list)
         {
-            if (!glusterd_is_local_brick(this, voliter, brickinfo))
+            if (!glusterd_is_local_brick(voliter, brickinfo))
                 continue;
             numbricks++;
         }
@@ -6197,7 +6205,7 @@ build_scrub_volume_graph(volgen_graph_t *graph, glusterd_volinfo_t *volinfo,
 
     cds_list_for_each_entry(brickinfo, &volinfo->bricks, brick_list)
     {
-        if (!glusterd_is_local_brick(this, volinfo, brickinfo))
+        if (!glusterd_is_local_brick(volinfo, brickinfo))
             continue;
 
         xl = volgen_graph_build_client(&cgraph, volinfo, brickinfo->hostname,

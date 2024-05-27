@@ -44,17 +44,14 @@ br_stub_fd_t *
 __br_stub_fd_ctx_get(xlator_t *this, fd_t *fd)
 {
     br_stub_fd_t *br_stub_fd = NULL;
-    uint64_t value = 0;
-    int ret = -1;
 
-    GF_VALIDATE_OR_GOTO("bit-rot-stub", this, out);
-    GF_VALIDATE_OR_GOTO(this->name, fd, out);
-
-    ret = __fd_ctx_get(fd, this, &value);
-    if (ret)
-        return NULL;
-
-    br_stub_fd = (br_stub_fd_t *)((long)value);
+    br_stub_fd = __fd_ctx_get_ptr(fd, this);
+    if (!br_stub_fd) {
+        /* check if one of the parameters was null and provide meaningful error
+         */
+        GF_VALIDATE_OR_GOTO("bit-rot-stub", this, out);
+        GF_VALIDATE_OR_GOTO(this->name, fd, out);
+    }
 
 out:
     return br_stub_fd;
@@ -451,6 +448,7 @@ br_stub_fill_readdir(fd_t *fd, br_stub_fd_t *fctx, DIR *dir, off_t off,
             0,
         },
     };
+    size_t entry_dname_len;
 
     this = THIS;
     if (!off) {
@@ -494,13 +492,18 @@ br_stub_fill_readdir(fd_t *fd, br_stub_fd_t *fctx, DIR *dir, off_t off,
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
             continue;
 
-        if (!strncmp(entry->d_name, "stub-", strlen("stub-"))) {
-            check_delete_stale_bad_file(this, entry->d_name);
-            continue;
+        entry_dname_len = strlen(entry->d_name);
+        /* skip checking for stable bad file if the file name is not
+         * exactly the length of 'stub-<uuid>'. Most file name lenghts aren't.
+         */
+        if (entry_dname_len == SLEN("stub-") + UUID_CANONICAL_FORM_LEN) {
+            if (!strncmp(entry->d_name, "stub-", SLEN("stub-"))) {
+                check_delete_stale_bad_file(this, entry->d_name);
+                continue;
+            }
         }
-
         this_size = max(sizeof(gf_dirent_t), sizeof(gfx_dirplist)) +
-                    strlen(entry->d_name) + 1;
+                    entry_dname_len + 1;
 
         if (this_size + filled > size) {
             seekdir(dir, in_case);

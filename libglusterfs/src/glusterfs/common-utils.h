@@ -160,6 +160,9 @@ trap(void);
 /* Advisory buffer size for formatted timestamps (see gf_time_fmt) */
 #define GF_TIMESTR_SIZE 256
 
+/* Allow empty relative pathname */
+#define AT_EMPTY_PATH 0x1000
+
 /*
  * we could have initialized these as +ve values and treated
  * them as negative while comparing etc.. (which would have
@@ -197,7 +200,7 @@ typedef enum _gf_xlator_ipc_targets _gf_xlator_ipc_targets_t;
 extern char *xattrs_to_heal[];
 
 char **
-get_xattrs_to_heal();
+get_xattrs_to_heal(void);
 
 char *
 gf_gethostname(void);
@@ -209,7 +212,9 @@ gf_set_nofile(rlim_t high, rlim_t low);
 
 #else /* Darwin */
 
-#define gf_set_nofile(low, high) do { } while (0)
+#define gf_set_nofile(low, high)                                               \
+    do {                                                                       \
+    } while (0)
 
 #endif /* not GF_DARWIN_HOST_OS */
 
@@ -860,15 +865,15 @@ gf_time_fmt(char *dst, size_t sz_dst, time_t utime, unsigned int fmt)
 
 static inline size_t
 gf_time_fmt_tv_FT(char *dst, size_t sz_dst, struct timeval *tv,
-                  glusterfs_ctx_t *ctx)
+                  gf_log_handle_t *log)
 {
     struct tm tm, *res;
     int localtime = 0;
     int len = 0;
     int pos = 0;
 
-    if (ctx != NULL)
-        localtime = ctx->log.localtime;
+    if (log != NULL)
+        localtime = log->localtime;
     else
         localtime = gf_log_get_localtime();
     res = localtime ? localtime_r(&tv->tv_sec, &tm)
@@ -1121,6 +1126,9 @@ recursive_rmdir(const char *delete_path);
 
 gf_boolean_t
 gf_unlink(const char *path);
+
+int
+gf_rebalance_thread_count(char *str, char **errmsg);
 
 int
 gf_get_index_by_elem(char **array, char *elem);

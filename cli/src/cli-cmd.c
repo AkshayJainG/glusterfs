@@ -28,7 +28,7 @@ static pthread_mutex_t conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 int cli_op_ret = 0;
 static gf_boolean_t connected = _gf_false;
 
-static unsigned
+static time_t
 cli_cmd_needs_connection(struct cli_state *state, struct cli_cmd_word *word)
 {
     if (!strcasecmp("quit", word->word))
@@ -230,14 +230,14 @@ out:
 }
 
 int
-cli_cmd_lock()
+cli_cmd_lock(void)
 {
     pthread_mutex_lock(&cond_mutex);
     return 0;
 }
 
 int
-cli_cmd_unlock()
+cli_cmd_unlock(void)
 {
     pthread_mutex_unlock(&cond_mutex);
     return 0;
@@ -297,7 +297,7 @@ out:
 }
 
 int32_t
-cli_cmd_await_connected(unsigned conn_timo)
+cli_cmd_await_connected(time_t conn_timo)
 {
     int32_t ret = 0;
     struct timespec ts = {

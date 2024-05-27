@@ -1530,10 +1530,6 @@ posix_unlink(call_frame_t *frame, xlator_t *this, loc_t *loc, int xflag,
     posix_set_parent_ctime(frame, this, par_path, -1, loc->parent, &postparent);
 
     unwind_dict = posix_dict_set_nlink(xdata, unwind_dict, stbuf.ia_nlink);
-    if (IA_ISREG(loc->inode->ia_type) && (stbuf.ia_nlink <= 2)) {
-        GF_ATOMIC_SUB(priv->write_value, ((stbuf.ia_blocks) * 512));
-    }
-
     op_ret = 0;
 out:
     SET_TO_OLD_FS_ID();
@@ -1991,9 +1987,6 @@ posix_rename(call_frame_t *frame, xlator_t *this, loc_t *oldloc, loc_t *newloc,
         }
     }
 
-    if (IA_ISDIR(oldloc->inode->ia_type))
-        posix_handle_unset_gfid(this, oldloc->inode->gfid);
-
     pthread_mutex_lock(&ctx_old->pgfid_lock);
     {
         if (!IA_ISDIR(oldloc->inode->ia_type) && priv->update_pgfid_nlinks) {
@@ -2090,6 +2083,7 @@ unlock:
         posix_handle_unset_gfid(this, victim);
 
     if (IA_ISDIR(oldloc->inode->ia_type)) {
+        posix_handle_unset_gfid(this, oldloc->inode->gfid);
         posix_handle_soft(this, real_newpath, newloc, oldloc->inode->gfid,
                           NULL);
     }

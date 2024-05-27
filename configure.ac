@@ -203,6 +203,7 @@ AC_CONFIG_FILES([Makefile
                 extras/systemd/gluster-ta-volume.service
                 extras/run-gluster.tmpfiles
                 extras/benchmarking/Makefile
+                extras/command-completion/Makefile
                 extras/hook-scripts/Makefile
                 extras/ocf/Makefile
                 extras/ocf/glusterd
@@ -267,6 +268,9 @@ AC_CHECK_PROG([RPCGEN], [rpcgen], [yes], [no])
 if test "x$RPCGEN" = "xno"; then
    AC_MSG_ERROR([`rpcgen` not found, glusterfs needs `rpcgen` exiting..])
 fi
+
+# Force 'char' type to be signed
+CFLAGS="${CFLAGS} -fsigned-char"
 
 # Initialize CFLAGS before usage
 AC_ARG_ENABLE([debug],
@@ -561,6 +565,11 @@ AC_SUBST(SIZEOF_SHORT)
 AC_SUBST(SIZEOF_INT)
 AC_SUBST(SIZEOF_LONG)
 AC_SUBST(SIZEOF_LONG_LONG)
+
+# size of time_t
+AC_CHECK_SIZEOF(time_t)
+SIZEOF_TIME_T=$ac_cv_sizeof_time_t
+AC_SUBST(SIZEOF_TIME_T)
 
 # YACC needs a check
 AC_PROG_YACC
@@ -1305,18 +1314,6 @@ fi
 
 AC_SUBST(GF_DISTRIBUTION)
 
-AC_CHECK_FILE([/etc/os-release])
-
-if test "x$ac_cv_file__etc_os_release" = "xyes"; then
-   AC_CANONICAL_HOST
-
-   if test "x${host_cpu}" = "xs390x" || test "x${host_cpu}" = "xs390" ; then
-      if grep "Red Hat Enterprise Linux 8\|SUSE Linux Enterprise Server 15" /etc/os-release ; then
-         AC_DEFINE(REDHAT8_OR_SLES15_ON_S390X, 1, [Red Hat 8 or SLES 15 on s390x])
-      fi
-   fi
-fi
-
 GF_HOST_OS=""
 GF_LDFLAGS="${GF_LDFLAGS} -rdynamic"
 
@@ -1609,6 +1606,14 @@ if test x$BUILD_READLINE = xyes; then
     AC_DEFINE(HAVE_READLINE, 1, [Enable CLI readline support.])
 fi
 
+# bash-completion script installation directory
+# PKG_CHECK_VAR should be used but is not available in some distributions
+bashcompdir="$(pkg-config --variable=completionsdir bash-completion 2>/dev/null)"
+if test "x${bashcompdir}" = "x"; then
+    bashcompdir="${sysconfdir}/bash_completion.d"
+fi
+AC_SUBST(bashcompdir)
+
 BUILD_LIBAIO=no
 AC_CHECK_LIB([aio],[io_setup],[LIBAIO="-laio"])
 
@@ -1704,6 +1709,18 @@ AC_SUBST(UNITTEST_LDFLAGS)
 
 AC_SUBST(CFLAGS)
 # end enable debug section
+
+dnl do not add -lresolv for freebsd
+case $host_os in
+  freebsd*)
+    RESOLV_LIBS=""
+    ;;
+  *)
+    RESOLV_LIBS="-lresolv"
+    ;;
+esac
+
+AC_SUBST(RESOLV_LIBS)
 
 # EC dynamic code generation section
 
@@ -1922,10 +1939,10 @@ echo "Enable Brick Mux     : $USE_BRICKMUX"
 echo "Building with LTO    : $LTO_BUILD"
 echo
 
-# dnl Note: ${X^^} capitalization assumes bash >= 4.x
 if test "x$SANITIZER" != "xnone"; then
+        UC_SANITIZER=$(echo ${SANITIZER} | tr 'a-z' 'A-Z')
         echo "Note: since glusterfs processes are daemon processes, use"
-        echo "'export ${SANITIZER^^}_OPTIONS=log_path=/path/to/xxx.log' to collect"
+        echo "'export ${UC_SANITIZER}_OPTIONS=log_path=/path/to/xxx.log' to collect"
         echo "sanitizer output. Further details and more options can be"
         echo "found at https://github.com/google/sanitizers."
 fi

@@ -103,7 +103,7 @@ out:
  *    -1: On error.
  */
 int
-gf_history_changelog_start_fresh()
+gf_history_changelog_start_fresh(void)
 {
     xlator_t *this = NULL;
     gf_changelog_journal_t *jnl = NULL;
@@ -214,7 +214,7 @@ out:
  *
  */
 ssize_t
-gf_history_changelog_scan()
+gf_history_changelog_scan(void)
 {
     int tracker_fd = 0;
     size_t off = 0;
@@ -519,6 +519,8 @@ gf_changelog_consume_wrap(void *data)
                "cannot read from history metadata file");
         goto out;
     }
+
+    ccd->changelog[nread] = '\0';
 
     /* TODO: handle short reads and EOF. */
     if (gf_is_changelog_usable(ccd->changelog) == 1) {
@@ -983,10 +985,8 @@ gf_history_changelog(char *changelog_dir, unsigned long start,
             ret = gf_thread_create(&consume_th, &attr, gf_history_consume,
                                    hist_data, "cloghcon");
             if (ret) {
-                gf_msg(this->name, GF_LOG_ERROR, ret,
-                       CHANGELOG_LIB_MSG_THREAD_CREATION_FAILED,
-                       "creation of consume parent-thread"
-                       " failed.");
+                gf_log(this->name, GF_LOG_ERROR,
+                       "creation of consume parent-thread failed.");
                 ret = -1;
                 goto out;
             }

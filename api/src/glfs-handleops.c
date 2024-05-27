@@ -234,13 +234,15 @@ pub_glfs_h_stat(struct glfs *fs, struct glfs_object *object, struct stat *stat)
     GLFS_LOC_FILL_INODE(inode, loc, out);
 
     /* fop/op */
-    ret = syncop_stat(subvol, &loc, &iatt, NULL, NULL);
+    if (stat) {
+        ret = syncop_stat(subvol, &loc, &iatt, NULL, NULL);
+        if (!ret)
+            /* populate out args */
+            glfs_iatt_to_stat(fs, &iatt, stat);
+    } else
+        ret = syncop_stat(subvol, &loc, NULL, NULL, NULL);
     DECODE_SYNCOP_ERR(ret);
 
-    /* populate out args */
-    if (!ret && stat) {
-        glfs_iatt_to_stat(fs, &iatt, stat);
-    }
 out:
     loc_wipe(&loc);
 
@@ -293,12 +295,14 @@ pub_glfs_h_getattrs(struct glfs *fs, struct glfs_object *object,
     }
 
     /* fop/op */
-    ret = glfs_resolve_base(fs, subvol, inode, &iatt);
-
-    /* populate out args */
-    if (!ret && stat) {
-        glfs_iatt_to_stat(fs, &iatt, stat);
-    }
+    if (stat) {
+        ret = glfs_resolve_base(fs, subvol, inode, &iatt);
+        /* populate out args */
+        if (!ret) {
+            glfs_iatt_to_stat(fs, &iatt, stat);
+        }
+    } else
+        ret = glfs_resolve_base(fs, subvol, inode, NULL);
 
 out:
     if (inode)
@@ -680,7 +684,11 @@ pub_glfs_h_open(struct glfs *fs, struct glfs_object *object, int flags)
     if (ret)
         gf_msg_debug("gfapi", 0, "Getting leaseid from thread failed");
 
-    ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
+    if (IA_ISDIR(inode->ia_type))
+        ret = syncop_opendir(subvol, &loc, glfd->fd, NULL, NULL);
+    else
+        ret = syncop_open(subvol, &loc, flags, glfd->fd, fop_attr, NULL);
+
     DECODE_SYNCOP_ERR(ret);
 
     glfd->fd->flags = flags;

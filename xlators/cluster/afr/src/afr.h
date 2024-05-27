@@ -154,8 +154,8 @@ struct afr_nfsd {
 
 typedef struct _afr_lk_heal_info {
     fd_t *fd;
-    int32_t cmd;
     struct gf_flock flock;
+    int32_t cmd;
     dict_t *xdata_req;
     unsigned char *locked_nodes;
     struct list_head pos;
@@ -262,6 +262,8 @@ typedef struct _afr_private {
     afr_self_heald_t shd;
     struct afr_nfsd nfsd;
 
+    gf_boolean_t use_anon_inode;
+
     uint32_t halo_max_latency_msec;
     uint32_t halo_max_replicas;
     uint32_t halo_min_replicas;
@@ -270,7 +272,6 @@ typedef struct _afr_private {
     gf_boolean_t esh_granular;
     gf_boolean_t consistent_io;
     gf_boolean_t data_self_heal; /* on/off */
-    gf_boolean_t use_anon_inode;
 
     /*For lock healing.*/
     struct list_head saved_locks;
@@ -998,7 +999,7 @@ int
 afr_locked_nodes_count(unsigned char *locked_nodes, int child_count);
 
 int
-afr_replies_interpret(call_frame_t *frame, xlator_t *this, inode_t *inode,
+afr_replies_interpret(afr_local_t *local, xlator_t *this, inode_t *inode,
                       gf_boolean_t *start_heal);
 
 void
@@ -1014,7 +1015,7 @@ int
 afr_open(call_frame_t *frame, xlator_t *this, loc_t *loc, int32_t flags,
          fd_t *fd, dict_t *xdata);
 
-int
+void
 afr_cleanup_fd_ctx(xlator_t *this, fd_t *fd);
 
 #define AFR_STACK_UNWIND(fop, frame, op_ret, op_errno, params...)              \

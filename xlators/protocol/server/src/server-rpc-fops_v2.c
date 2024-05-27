@@ -703,7 +703,7 @@ out:
 
     req = frame->local;
     server_submit_reply(frame, req, &rsp, NULL, 0, NULL,
-                        (xdrproc_t)xdr_gfx_readdir_rsp);
+                        (xdrproc_t)xdr_gfx_readdir_rsp_custom);
 
     GF_FREE(rsp.xdata.pairs.pairs_val);
 
@@ -1887,7 +1887,7 @@ out:
 
     req = frame->local;
     server_submit_reply(frame, req, &rsp, NULL, 0, NULL,
-                        (xdrproc_t)xdr_gfx_readdirp_rsp);
+                        (xdrproc_t)xdr_gfx_readdirp_rsp_custom);
 
     GF_FREE(rsp.xdata.pairs.pairs_val);
 
@@ -4084,15 +4084,6 @@ server4_0_writev(rpcsvc_request_t *req)
     if (xdr_to_dict(&args.xdata, &state->xdata)) {
         SERVER_REQ_SET_ERROR(req, ret);
         goto out;
-    }
-
-    if (state->xdata) {
-        ret = dict_set_int32_sizen(state->xdata, "buffer-size", len);
-        if (ret) {
-            gf_msg(THIS->name, GF_LOG_INFO, ENOMEM, 0,
-                   "%zu: dict set (buffer-size) failed, continuing", len);
-            goto out;
-        }
     }
 
 #ifdef GF_TESTING_IO_XDATA

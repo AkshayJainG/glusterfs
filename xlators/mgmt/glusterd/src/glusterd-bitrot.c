@@ -99,29 +99,7 @@ __glusterd_handle_bitrot(rpcsvc_request_t *req)
         goto out;
     }
 
-    if (conf->op_version < GD_OP_VERSION_3_7_0) {
-        snprintf(msg, sizeof(msg),
-                 "Cannot execute command. The "
-                 "cluster is operating at version %d. Bitrot command "
-                 "%s is unavailable in this version",
-                 conf->op_version, gd_bitrot_op_list[type]);
-        ret = -1;
-        goto out;
-    }
-
     if (type == GF_BITROT_CMD_SCRUB_STATUS) {
-        /* Backward compatibility handling for scrub status command*/
-        if (conf->op_version < GD_OP_VERSION_3_7_7) {
-            snprintf(msg, sizeof(msg),
-                     "Cannot execute command. "
-                     "The cluster is operating at version %d. "
-                     "Bitrot scrub status command unavailable in "
-                     "this version",
-                     conf->op_version);
-            ret = -1;
-            goto out;
-        }
-
         ret = dict_get_str(dict, "scrub-value", &scrub);
         if (ret) {
             gf_msg(this->name, GF_LOG_ERROR, 0, GD_MSG_DICT_GET_FAILED,
@@ -337,7 +315,7 @@ out:
 }
 
 static gf_boolean_t
-is_bitd_configure_noop(xlator_t *this, glusterd_volinfo_t *volinfo)
+is_bitd_configure_noop(glusterd_volinfo_t *volinfo)
 {
     gf_boolean_t noop = _gf_true;
     glusterd_brickinfo_t *brickinfo = NULL;
@@ -349,7 +327,7 @@ is_bitd_configure_noop(xlator_t *this, glusterd_volinfo_t *volinfo)
     else {
         cds_list_for_each_entry(brickinfo, &volinfo->bricks, brick_list)
         {
-            if (!glusterd_is_local_brick(this, volinfo, brickinfo))
+            if (!glusterd_is_local_brick(volinfo, brickinfo))
                 continue;
             noop = _gf_false;
             return noop;
@@ -395,7 +373,7 @@ glusterd_bitrot_signer_threads(glusterd_volinfo_t *volinfo, dict_t *dict,
         goto out;
     }
 
-    if (!is_bitd_configure_noop(this, volinfo)) {
+    if (!is_bitd_configure_noop(volinfo)) {
         ret = priv->bitd_svc.manager(&(priv->bitd_svc), NULL,
                                      PROC_START_NO_WAIT);
         if (ret) {
@@ -496,7 +474,7 @@ out:
 }
 
 gf_boolean_t
-glusterd_should_i_stop_bitd()
+glusterd_should_i_stop_bitd(void)
 {
     xlator_t *this = THIS;
     glusterd_conf_t *conf = this->private;
@@ -513,7 +491,7 @@ glusterd_should_i_stop_bitd()
         else {
             cds_list_for_each_entry(brickinfo, &volinfo->bricks, brick_list)
             {
-                if (!glusterd_is_local_brick(this, volinfo, brickinfo))
+                if (!glusterd_is_local_brick(volinfo, brickinfo))
                     continue;
                 stopped = _gf_false;
                 return stopped;

@@ -141,7 +141,7 @@ struct cli_state {
     char *remote_host;
     int remote_port;
     int mode;
-    int await_connected;
+    time_t await_connected;
 
     time_t default_conn_timeout;
 
@@ -335,16 +335,16 @@ cli_cmd_volume_clrlks_opts_parse(const char **words, int wordcount,
                                  dict_t **options);
 
 cli_local_t *
-cli_local_get();
+cli_local_get(void);
 
 void
 cli_local_wipe(cli_local_t *local);
 
 gf_boolean_t
-cli_cmd_connected();
+cli_cmd_connected(void);
 
 int32_t
-cli_cmd_await_connected(unsigned timeout);
+cli_cmd_await_connected(time_t timeout);
 
 int32_t
 cli_cmd_broadcast_connected(gf_boolean_t status);

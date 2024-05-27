@@ -80,7 +80,7 @@ typedef enum {
 } glfsh_fail_mode_t;
 
 int
-glfsh_init()
+glfsh_init(void)
 {
     return 0;
 }
@@ -146,7 +146,7 @@ glfsh_print_hr_heal_status(char *path, uuid_t gfid, char *status)
 #if (HAVE_LIB_XML)
 
 int
-glfsh_xml_init()
+glfsh_xml_init(void)
 {
     int ret = -1;
     glfsh_writer = xmlNewTextWriterDoc(&glfsh_doc, 0);
@@ -507,7 +507,7 @@ glfsh_print_heal_op_status(int ret, uint64_t num_entries,
     return glfsh_output->print_heal_op_status(ret, num_entries, fmt_str);
 }
 
-int
+static int
 glfsh_get_index_dir_loc(loc_t *rootloc, xlator_t *xl, loc_t *dirloc,
                         int32_t *op_errno, char *vgfid)
 {
@@ -515,7 +515,6 @@ glfsh_get_index_dir_loc(loc_t *rootloc, xlator_t *xl, loc_t *dirloc,
     int ret = 0;
     dict_t *xattr = NULL;
     struct iatt iattr = {0};
-    struct iatt parent = {0};
 
     ret = syncop_getxattr(xl, rootloc, &xattr, vgfid, NULL, NULL);
     if (ret < 0) {
@@ -532,7 +531,7 @@ glfsh_get_index_dir_loc(loc_t *rootloc, xlator_t *xl, loc_t *dirloc,
     gf_uuid_copy(dirloc->gfid, index_gfid);
     dirloc->path = "";
     dirloc->inode = inode_new(rootloc->inode->table);
-    ret = syncop_lookup(xl, dirloc, &iattr, &parent, NULL, NULL);
+    ret = syncop_lookup(xl, dirloc, &iattr, NULL, NULL, NULL);
     dirloc->path = NULL;
     if (ret < 0) {
         *op_errno = -ret;
@@ -755,8 +754,8 @@ glfsh_heal_entries(glfs_t *fs, xlator_t *top_subvol, loc_t *rootloc,
     list_for_each_entry_safe(entry, tmp, &entries->list, list)
     {
         *offset = entry->d_off;
-        if ((strcmp(entry->d_name, ".") == 0) ||
-            (strcmp(entry->d_name, "..") == 0))
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(entry))
             continue;
         snprintf(file, sizeof(file), "gfid:%s", entry->d_name);
         ret = glfsh_heal_splitbrain_file(fs, top_subvol, rootloc, file,
@@ -789,8 +788,8 @@ glfsh_process_entries(xlator_t *xl, fd_t *fd, gf_dirent_t *entries,
     list_for_each_entry_safe(entry, tmp, &entries->list, list)
     {
         *offset = entry->d_off;
-        if ((strcmp(entry->d_name, ".") == 0) ||
-            (strcmp(entry->d_name, "..") == 0))
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(entry))
             continue;
 
         if (dict) {

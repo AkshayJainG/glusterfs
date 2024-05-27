@@ -629,6 +629,7 @@ trash_internalop_dir_lookup_cbk(call_frame_t *frame, void *cookie,
         loc_copy(&local->loc, &loc);
         STACK_WIND(frame, trash_internal_op_mkdir_cbk, FIRST_CHILD(this),
                    FIRST_CHILD(this)->fops->mkdir, &loc, 0755, 0022, dict);
+        dict_unref(dict);
         return 0;
     }
 
@@ -2285,7 +2286,7 @@ reconfigure(xlator_t *this, dict_t *options)
                      out);
     if (max_fsize) {
         priv->max_trash_file_size = max_fsize;
-        gf_log(this->name, GF_LOG_DEBUG, "%" GF_PRI_SIZET " max-size",
+        gf_log(this->name, GF_LOG_DEBUG, "%" PRIu64 " max-size",
                priv->max_trash_file_size);
     }
     GF_OPTION_RECONF("trash-eliminate-path", tmp, options, str, out);
@@ -2463,7 +2464,7 @@ init(xlator_t *this)
         priv->max_trash_file_size = GF_DEFAULT_MAX_FILE_SIZE;
     } else {
         priv->max_trash_file_size = max_trash_file_size64;
-        gf_log(this->name, GF_LOG_DEBUG, "%" GF_PRI_SIZET " max-size",
+        gf_log(this->name, GF_LOG_DEBUG, "%" PRIu64 " max-size",
                priv->max_trash_file_size);
     }
 

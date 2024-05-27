@@ -2370,6 +2370,7 @@ dht_lookup_everywhere_done(call_frame_t *frame, xlator_t *this)
             return 0;
         }
         /* A hack */
+        local->gfid_missing = _gf_false;
         dht_lookup_directory(frame, this, &local->loc);
         return 0;
     }
@@ -3962,28 +3963,29 @@ dht_setxattr_mds_cbk(call_frame_t *frame, void *cookie, xlator_t *this,
     for (i = 0; i < conf->subvolume_cnt; i++) {
         if (mds_subvol && (mds_subvol == conf->subvolumes[i]))
             continue;
-        if (local->fop == GF_FOP_SETXATTR) {
-            STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
-                       conf->subvolumes[i]->fops->setxattr, &local->loc,
-                       local->xattr, local->flags, local->xattr_req);
-        }
-
-        if (local->fop == GF_FOP_FSETXATTR) {
-            STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
-                       conf->subvolumes[i]->fops->fsetxattr, local->fd,
-                       local->xattr, local->flags, local->xattr_req);
-        }
-
-        if (local->fop == GF_FOP_REMOVEXATTR) {
-            STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
-                       conf->subvolumes[i]->fops->removexattr, &local->loc,
-                       local->key, local->xattr_req);
-        }
-
-        if (local->fop == GF_FOP_FREMOVEXATTR) {
-            STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
-                       conf->subvolumes[i]->fops->fremovexattr, local->fd,
-                       local->key, local->xattr_req);
+        switch (local->fop) {
+            case GF_FOP_SETXATTR:
+                STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
+                           conf->subvolumes[i]->fops->setxattr, &local->loc,
+                           local->xattr, local->flags, local->xattr_req);
+                break;
+            case GF_FOP_FSETXATTR:
+                STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
+                           conf->subvolumes[i]->fops->fsetxattr, local->fd,
+                           local->xattr, local->flags, local->xattr_req);
+                break;
+            case GF_FOP_REMOVEXATTR:
+                STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
+                           conf->subvolumes[i]->fops->removexattr, &local->loc,
+                           local->key, local->xattr_req);
+                break;
+            case GF_FOP_FREMOVEXATTR:
+                STACK_WIND(frame, dht_setxattr_non_mds_cbk, conf->subvolumes[i],
+                           conf->subvolumes[i]->fops->fremovexattr, local->fd,
+                           local->key, local->xattr_req);
+                break;
+            default:
+                break;
         }
     }
 
@@ -10389,9 +10391,8 @@ dht_rmdir_is_subvol_empty(call_frame_t *frame, xlator_t *this,
 
     list_for_each_entry(trav, &entries->list, list)
     {
-        if (strcmp(trav->d_name, ".") == 0)
-            continue;
-        if (strcmp(trav->d_name, "..") == 0)
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(trav))
             continue;
         if (check_is_linkfile(NULL, (&trav->d_stat), trav->dict,
                               conf->link_xattr_name)) {
@@ -10429,9 +10430,8 @@ dht_rmdir_is_subvol_empty(call_frame_t *frame, xlator_t *this,
 
     list_for_each_entry(trav, &entries->list, list)
     {
-        if (strcmp(trav->d_name, ".") == 0)
-            continue;
-        if (strcmp(trav->d_name, "..") == 0)
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(trav))
             continue;
 
         lookup_frame = copy_frame(frame);
@@ -10729,7 +10729,13 @@ dht_rmdir(call_frame_t *frame, xlator_t *this, loc_t *loc, int flags,
         goto err;
     }
 
-    if (flags) {
+    /* By default rmdir_optimize is enabled, In this case we
+       don't need to wind a readdirp call to unlink about linkto
+       files, After fixing the stale linkto files issue by the patch
+       https://github.com/gluster/glusterfs/issues/3683 it is unlikely
+       the stale linkto files exist on the backend
+    */
+    if (flags || conf->rmdir_optimize) {
         return dht_rmdir_do(frame, this);
     }
     if (xdata) {

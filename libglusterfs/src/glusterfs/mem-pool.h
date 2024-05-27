@@ -44,15 +44,15 @@ typedef uint32_t gf_mem_magic_t;
 #define NPOOLS (POOL_LARGEST - POOL_SMALLEST + 1)
 
 struct mem_acct_rec {
-    const char *typestr;
     gf_atomic_t num_allocs;
+    const char *typestr;
 #ifdef DEBUG
+    gf_lock_t lock;
     uint64_t size;
     uint64_t max_size;
     uint32_t max_num_allocs;
-    gf_lock_t lock;
     struct list_head obj_list;
-#endif
+#endif /* DEBUG */
 };
 
 struct mem_acct {
@@ -78,8 +78,8 @@ struct mem_header {
 #ifdef DEBUG
 struct mem_invalid {
     gf_mem_magic_t magic;
-    void *mem_acct;
     uint32_t type;
+    void *mem_acct;
     size_t size;
     void *baseaddr;
 };
@@ -297,7 +297,7 @@ typedef struct per_thread_pool_list {
      * in the implementation code so we just make it a single-element array
      * here.
      */
-    per_thread_pool_t pools[];
+    per_thread_pool_t pools[1];
 } per_thread_pool_list_t;
 
 /* actual pool structure, shared between different mem_pools */

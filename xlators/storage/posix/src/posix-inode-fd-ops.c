@@ -1198,7 +1198,7 @@ out:
     if (op_errno == ENOSPC && priv->disk_space_full && !check_space_error) {
         ret = posix_fd_ctx_get(fd, this, &pfd, &op_errno);
         if (ret < 0) {
-            gf_msg(this->name, GF_LOG_WARNING, ret, P_MSG_PFD_NULL,
+            gf_msg(this->name, GF_LOG_WARNING, op_errno, P_MSG_PFD_NULL,
                    "pfd is NULL from fd=%p", fd);
             goto out;
         }
@@ -1430,19 +1430,16 @@ int32_t
 posix_releasedir(xlator_t *this, fd_t *fd)
 {
     struct posix_fd *pfd = NULL;
-    uint64_t tmp_pfd = 0;
-    int ret = 0;
 
     VALIDATE_OR_GOTO(this, out);
     VALIDATE_OR_GOTO(fd, out);
 
-    ret = fd_ctx_del(fd, this, &tmp_pfd);
-    if (ret < 0) {
+    pfd = fd_ctx_del_ptr(fd, this);
+    if (pfd == NULL) {
         gf_msg_debug(this->name, 0, "pfd from fd=%p is NULL", fd);
         goto out;
     }
 
-    pfd = (struct posix_fd *)(long)tmp_pfd;
     if (!pfd->dir) {
         gf_msg(this->name, GF_LOG_WARNING, 0, P_MSG_PFD_NULL,
                "pfd->dir is NULL for fd=%p", fd);
@@ -1578,10 +1575,6 @@ posix_truncate(call_frame_t *frame, xlator_t *this, loc_t *loc, off_t offset,
     }
 
     posix_set_ctime(frame, this, real_path, -1, loc->inode, &postbuf);
-
-    if (postbuf.ia_blocks < prebuf.ia_blocks)
-        GF_ATOMIC_SUB(priv->write_value,
-                      ((prebuf.ia_blocks - postbuf.ia_blocks) * 512));
 
     op_ret = 0;
 out:
@@ -2036,7 +2029,7 @@ posix_writev(call_frame_t *frame, xlator_t *this, fd_t *fd,
     priv = this->private;
 
     VALIDATE_OR_GOTO(priv, unwind);
-    DISK_SPACE_CHECK_WRITEV_AND_GOTO(frame, priv, xdata, op_ret, op_errno, out);
+    DISK_SPACE_CHECK_AND_GOTO(frame, priv, xdata, op_ret, op_errno, out);
 
 overwrite:
 
@@ -2051,8 +2044,7 @@ overwrite:
 
     ret = posix_fd_ctx_get(fd, this, &pfd, &op_errno);
     if (ret < 0) {
-        gf_msg(this->name, GF_LOG_WARNING, ret, P_MSG_PFD_NULL,
-               "pfd is NULL from fd=%p", fd);
+        gf_log(this->name, GF_LOG_WARNING, "pfd is NULL from fd=%p", fd);
         goto out;
     }
 
@@ -2178,9 +2170,7 @@ overwrite:
         }
     }
 
-    if (preop.ia_blocks < postop.ia_blocks)
-        GF_ATOMIC_ADD(priv->write_value,
-                      ((postop.ia_blocks - preop.ia_blocks) * 512));
+    GF_ATOMIC_ADD(priv->write_value, op_ret);
 
 out:
 
@@ -2188,11 +2178,16 @@ out:
         pthread_mutex_unlock(&ctx->write_atomic_lock);
         locked = _gf_false;
     }
-
-    if (op_errno == ENOSPC && priv->disk_space_full && !check_space_error) {
+    /* Check overwrite in case if errorno is ENOSPC, there could be
+       a situation the disk_space_check thread is not set disk_space_flag
+       because the thread is already waiting on sleep and other thread has
+       already consumed free disk space, at the same time if another client try
+       to overwrite the data it would get failed.
+    */
+    if (op_errno == ENOSPC && !check_space_error) {
         ret = posix_fd_ctx_get(fd, this, &pfd, &op_errno);
         if (ret < 0) {
-            gf_msg(this->name, GF_LOG_WARNING, ret, P_MSG_PFD_NULL,
+            gf_msg(this->name, GF_LOG_WARNING, op_errno, P_MSG_PFD_NULL,
                    "pfd is NULL from fd=%p", fd);
             goto unwind;
         }
@@ -2278,7 +2273,7 @@ posix_copy_file_range(call_frame_t *frame, xlator_t *this, fd_t *fd_in,
 
     ret = posix_fd_ctx_get(fd_in, this, &pfd_in, &op_errno);
     if (ret < 0) {
-        gf_msg(this->name, GF_LOG_WARNING, ret, P_MSG_PFD_NULL,
+        gf_msg(this->name, GF_LOG_WARNING, op_errno, P_MSG_PFD_NULL,
                "pfd is NULL from fd=%p", fd_in);
         goto out;
     }
@@ -2646,8 +2641,6 @@ int32_t
 posix_release(xlator_t *this, fd_t *fd)
 {
     struct posix_fd *pfd = NULL;
-    int ret = -1;
-    uint64_t tmp_pfd = 0;
 
     VALIDATE_OR_GOTO(this, out);
     VALIDATE_OR_GOTO(fd, out);
@@ -2655,14 +2648,13 @@ posix_release(xlator_t *this, fd_t *fd)
     if (fd->inode->active_fd_count == 0)
         posix_unlink_renamed_file(this, fd->inode);
 
-    ret = fd_ctx_del(fd, this, &tmp_pfd);
-    if (ret < 0) {
+    pfd = fd_ctx_del_ptr(fd, this);
+    if (pfd == NULL) {
         gf_msg(this->name, GF_LOG_WARNING, 0, P_MSG_PFD_NULL,
                "pfd is NULL from fd=%p", fd);
         goto out;
     }
 
-    pfd = (struct posix_fd *)(long)tmp_pfd;
     if (pfd->dir) {
         gf_msg(this->name, GF_LOG_WARNING, 0, P_MSG_DIR_NOT_NULL,
                "pfd->dir is %p (not NULL) for file fd=%p", pfd->dir, fd);
@@ -4181,6 +4173,10 @@ posix_fgetxattr(call_frame_t *frame, xlator_t *this, fd_t *fd, const char *name,
         0,
     };
     dict_t *xattr_rsp = NULL;
+    char *path = NULL;
+    loc_t loc = {
+        0,
+    };
 
     DECLARE_OLD_FS_ID_VAR;
 
@@ -4206,6 +4202,44 @@ posix_fgetxattr(call_frame_t *frame, xlator_t *this, fd_t *fd, const char *name,
         op_ret = -1;
         op_errno = ENOMEM;
         goto out;
+    }
+
+    if (fd->inode && name &&
+        (strncmp(name, GF_XATTR_GET_REAL_FILENAME_KEY,
+                 SLEN(GF_XATTR_GET_REAL_FILENAME_KEY)) == 0)) {
+        ret = inode_path(fd->inode, NULL, &path);
+        if (ret < 0) {
+            op_ret = -1;
+            op_errno = -ret;
+            goto out;
+        }
+
+        loc.path = path;
+        loc.inode = inode_ref(fd->inode);
+        gf_uuid_copy(loc.gfid, fd->inode->gfid);
+
+        ret = posix_xattr_get_real_filename(frame, this, &loc, name, dict,
+                                            xdata);
+        if (ret < 0) {
+            op_ret = -1;
+            op_errno = -ret;
+            if (op_errno == ENOATTR) {
+                gf_msg_debug(this->name, 0,
+                             "Failed to get "
+                             "real filename (%s, %s)",
+                             loc.path, name);
+            } else {
+                gf_msg(this->name, GF_LOG_WARNING, op_errno,
+                       P_MSG_GETTING_FILENAME_FAILED,
+                       "Failed to get real filename (%s, %s):", loc.path, name);
+            }
+            loc_wipe(&loc);
+            goto out;
+        }
+
+        size = ret;
+        loc_wipe(&loc);
+        goto done;
     }
 
     if (name && !strcmp(name, GLUSTERFS_OPEN_FD_COUNT)) {
@@ -4828,6 +4862,7 @@ posix_fsyncdir(call_frame_t *frame, xlator_t *this, fd_t *fd, int datasync,
     int32_t op_errno = 0;
     int ret = -1;
     struct posix_fd *pfd = NULL;
+    int _fd = -1;
 
     VALIDATE_OR_GOTO(frame, out);
     VALIDATE_OR_GOTO(this, out);
@@ -4840,7 +4875,28 @@ posix_fsyncdir(call_frame_t *frame, xlator_t *this, fd_t *fd, int datasync,
         goto out;
     }
 
-    op_ret = 0;
+    _fd = pfd->fd;
+    if (datasync) {
+        op_ret = sys_fdatasync(_fd);
+        if (op_ret == -1) {
+            op_errno = errno;
+            gf_msg(this->name, GF_LOG_ERROR, errno, P_MSG_FSYNC_FAILED,
+                   "fdatasync on fd=%p"
+                   "failed:",
+                   fd);
+            goto out;
+        }
+    } else {
+        op_ret = sys_fsync(_fd);
+        if (op_ret == -1) {
+            op_errno = errno;
+            gf_msg(this->name, GF_LOG_ERROR, errno, P_MSG_FSYNC_FAILED,
+                   "fsync on fd=%p "
+                   "failed",
+                   fd);
+            goto out;
+        }
+    }
 
 out:
     STACK_UNWIND_STRICT(fsyncdir, frame, op_ret, op_errno, NULL);
@@ -5626,6 +5682,7 @@ posix_fill_readdir(fd_t *fd, struct posix_fd *pfd, off_t off, size_t size,
         },
     };
     size_t entry_dname_len;
+    gf_boolean_t is_root_gfid = __is_root_gfid(fd->inode->gfid);
 
     if (!off) {
         rewinddir(pfd->dir);
@@ -5683,8 +5740,7 @@ posix_fill_readdir(fd_t *fd, struct posix_fd *pfd, off_t off, size_t size,
             continue;
 #endif /* __NetBSD__ */
 
-        if (__is_root_gfid(fd->inode->gfid) &&
-            (!strcmp(GF_HIDDEN_PATH, entry->d_name))) {
+        if (is_root_gfid && (!strcmp(GF_HIDDEN_PATH, entry->d_name))) {
             continue;
         }
 
@@ -5890,11 +5946,13 @@ posix_do_readdir(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
     gf_dirent_t entries;
     int32_t skip_dirs = 0;
 
+    /* Initialize the list ptr before call VALIDATE to avoid coverity
+       warning
+     */
+    INIT_LIST_HEAD(&entries.list);
     VALIDATE_OR_GOTO(frame, out);
     VALIDATE_OR_GOTO(this, out);
     VALIDATE_OR_GOTO(fd, out);
-
-    INIT_LIST_HEAD(&entries.list);
 
     ret = posix_fd_ctx_get(fd, this, &pfd, &op_errno);
     if (ret < 0) {
@@ -5978,7 +6036,10 @@ posix_readdirp(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
         if (op_ret >= 0) {
             op_ret = 0;
 
-            list_for_each_entry(entry, &entries.list, list) { op_ret++; }
+            list_for_each_entry(entry, &entries.list, list)
+            {
+                op_ret++;
+            }
         }
 
         STACK_UNWIND_STRICT(readdirp, frame, op_ret, op_errno, &entries, NULL);

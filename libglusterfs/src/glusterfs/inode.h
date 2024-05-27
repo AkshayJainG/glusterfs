@@ -39,22 +39,22 @@ struct _inode_table {
     char *name;             /* name of the inode table, just for gf_log() */
     inode_t *root;          /* root directory inode, with number 1 */
     xlator_t *xl;           /* xlator to be called to do purge */
-    uint32_t lru_limit;     /* maximum LRU cache size */
     struct list_head *inode_hash; /* buckets for inode hash table */
     struct list_head *name_hash;  /* buckets for dentry hash table */
     struct list_head active; /* list of inodes currently active (in an fop) */
     uint32_t active_size;    /* count of inodes in active list */
+    uint32_t lru_limit;      /* maximum LRU cache size */
     struct list_head lru;    /* list of inodes recently used.
                                 lru.next most recent */
     uint32_t lru_size;       /* count of inodes in lru list  */
-    struct list_head purge;  /* list of inodes to be purged soon */
     uint32_t purge_size;     /* count of inodes in purge list */
+    struct list_head purge;  /* list of inodes to be purged soon */
 
-    struct mem_pool *inode_pool;  /* memory pool for inodes */
-    struct mem_pool *dentry_pool; /* memory pool for dentrys */
     struct mem_pool *fd_mem_pool; /* memory pool for fd_t */
     int ctxcount;                 /* number of slots in inode->ctx */
 
+    uint32_t root_id; /* Save the xlator id at the time of inode table
+                         creation */
     /* This is required for 'invalidation' when 'nlookup' would be used,
        specially in case of fuse-bridge */
     int32_t (*invalidator_fn)(xlator_t *, inode_t *);
@@ -62,8 +62,6 @@ struct _inode_table {
     struct list_head invalidate; /* inodes which are in invalidation queue */
     uint32_t invalidate_size;    /* count of inodes in invalidation list */
     uint32_t root_level; /* Save the xlator level at the time of inode table
-                            creation */
-    uint32_t root_id;    /* Save the xlator id at the time of inode table
                             creation */
     /* flag to indicate whether the cleanup of the inode
        table started or not */
@@ -74,8 +72,8 @@ struct _dentry {
     struct list_head inode_list; /* list of dentries of inode */
     struct list_head hash;       /* hash table pointers */
     inode_t *inode;              /* inode of this directory entry */
-    char *name;                  /* name of the directory entry */
     inode_t *parent;             /* directory of the entry */
+    char name[];                  /* name of the directory entry */
 };
 
 struct _inode_ctx {
@@ -114,11 +112,11 @@ struct _inode {
     struct list_head hash;        /* hash table pointers */
     struct list_head list;        /* active/lru/purge */
 
-    struct _inode *ns_inode; /* This inode would point to namespace inode */
-    struct _inode_ctx *_ctx; /* replacement for dict_t *(inode->ctx) */
-    bool in_invalidate_list; /* Set if inode is in table invalidate list */
-    bool invalidate_sent;    /* Set it if invalidator_fn is called for inode */
-    bool in_lru_list;        /* Set if inode is in table lru list */
+    struct _inode *ns_inode;  /* This inode would point to namespace inode */
+    bool in_invalidate_list;  /* Set if inode is in table invalidate list */
+    bool invalidate_sent;     /* Set it if invalidator_fn is called for inode */
+    bool in_lru_list;         /* Set if inode is in table lru list */
+    struct _inode_ctx _ctx[]; /* replacement for dict_t *(inode->ctx) */
 };
 
 #define UUID0_STR "00000000-0000-0000-0000-000000000000"
@@ -286,9 +284,6 @@ gf_boolean_t
 __is_root_gfid(uuid_t gfid);
 
 void
-__inode_table_set_lru_limit(inode_table_t *table, uint32_t lru_limit);
-
-void
 inode_table_set_lru_limit(inode_table_t *table, uint32_t lru_limit);
 
 void
@@ -297,17 +292,11 @@ inode_ctx_merge(fd_t *fd, inode_t *inode, inode_t *linked_inode);
 int
 inode_is_linked(inode_t *inode);
 
-void
-inode_set_need_lookup(inode_t *inode, xlator_t *this);
-
 gf_boolean_t
 inode_needs_lookup(inode_t *inode, xlator_t *this);
 
 int
 inode_has_dentry(inode_t *inode);
-
-size_t
-inode_ctx_size(inode_t *inode);
 
 void
 inode_find_directory_name(inode_t *inode, const char **name);

@@ -301,11 +301,14 @@ get_auth_types(dict_t *this, char *key, data_t *value, void *data)
             tmp = "addr";
             gf_smsg("server", GF_LOG_WARNING, 0, PS_MSG_AUTH_IP_ERROR, NULL);
         }
-        ret = dict_set_dynptr(auth_dict, tmp, NULL, 0);
-        if (ret < 0) {
-            gf_msg_debug("server", 0,
-                         "failed to "
-                         "dict_set_dynptr");
+        /* Only add the auth type if not already present. */
+        if (dict_get(auth_dict, tmp) == NULL) {
+            ret = dict_set_dynptr(auth_dict, tmp, NULL, 0);
+            if (ret < 0) {
+                gf_msg_debug("server", 0,
+                            "failed to "
+                            "dict_set_dynptr");
+            }
         }
     }
 
@@ -580,8 +583,6 @@ glusterfs_ctx_pool_destroy(glusterfs_ctx_t *ctx)
         mem_pool_destroy(ctx->dict_pool);
     if (ctx->dict_data_pool)
         mem_pool_destroy(ctx->dict_data_pool);
-    if (ctx->dict_pair_pool)
-        mem_pool_destroy(ctx->dict_pair_pool);
     if (ctx->logbuf_pool)
         mem_pool_destroy(ctx->logbuf_pool);
 
@@ -862,12 +863,21 @@ server_reconfigure(xlator_t *this, dict_t *options)
     GF_FREE(this->ctx->statedump_path);
     this->ctx->statedump_path = gf_strdup(statedump_path);
 
+    /* if the option is not set, we should fall back to NULL value */
+    GF_FREE(conf->volfile_dir);
+    conf->volfile_dir = NULL;
+    statedump_path = NULL;
+    GF_OPTION_RECONF("volspec-directory", statedump_path, options, path,
+                     do_auth);
+    if (statedump_path) {
+        gf_path_strip_trailing_slashes(statedump_path);
+        conf->volfile_dir = gf_strdup(statedump_path);
+        if (!conf->volfile_dir) {
+            ret = -1;
+            goto out;
+        }
+    }
 do_auth:
-    if (conf->auth_modules)
-        gf_auth_fini(conf->auth_modules);
-    else
-        conf->auth_modules = dict_new();
-
     dict_foreach(options, get_auth_types, conf->auth_modules);
     ret = validate_auth_options(kid, options);
     if (ret == -1) {
@@ -1015,7 +1025,7 @@ client_destroy_cbk(xlator_t *this, client_t *client)
     void *tmp = NULL;
     server_ctx_t *ctx = NULL;
 
-    client_ctx_del(client, this, &tmp);
+    tmp = client_ctx_del(client, this);
 
     ctx = tmp;
 
@@ -1092,6 +1102,7 @@ server_cleanup(xlator_t *this, server_conf_t *conf)
     if (conf->auth_modules) {
         gf_auth_fini(conf->auth_modules);
         dict_unref(conf->auth_modules);
+        conf->auth_modules = NULL;
     }
 
     if (conf->rpc) {
@@ -1143,6 +1154,7 @@ server_init(xlator_t *this)
     if (ret)
         goto err;
 
+    /* Volfile server */
     ret = dict_get_str_sizen(this->options, "config-directory",
                              &conf->conf_dir);
     if (ret)
@@ -1161,6 +1173,19 @@ server_init(xlator_t *this)
                 NULL);
         ret = -1;
         goto err;
+    }
+
+    statedump_path = NULL;
+    GF_OPTION_INIT("volspec-directory", statedump_path, path, err);
+    if (statedump_path) {
+        gf_path_strip_trailing_slashes(statedump_path);
+        conf->volfile_dir = gf_strdup(statedump_path);
+        if (!conf->volfile_dir) {
+            gf_smsg(this->name, GF_LOG_ERROR, 0,
+                    PS_MSG_SET_STATEDUMP_PATH_ERROR, NULL);
+            ret = -1;
+            goto err;
+        }
     }
 
     /* Authentication modules */
@@ -1331,6 +1356,7 @@ server_fini(xlator_t *this)
                 if (conf->auth_modules)
                         dict_unref (conf->auth_modules);
 
+                GF_FREE (conf->volfile_dir);
                 GF_FREE (conf);
         }
 
@@ -1441,6 +1467,12 @@ server_process_event_upcall(xlator_t *this, void *data)
             /* 'client' is not atomically added during xprt entry
              * addition to the list. */
             if (!client || strcmp(client->client_uid, client_uid))
+                continue;
+
+           /* Avoid upcall notification to client if disconnect is in
+              progress
+            */
+            if (GF_ATOMIC_GET(xprt->disconnect_progress))
                 continue;
 
             xprt_found = _gf_true;
@@ -1584,8 +1616,6 @@ server_notify(xlator_t *this, int32_t event, void *data, ...)
         }
 
         case GF_EVENT_PARENT_UP: {
-            conf = this->private;
-
             conf->parent_up = _gf_true;
 
             default_notify(this, event, data);
@@ -1623,7 +1653,6 @@ server_notify(xlator_t *this, int32_t event, void *data, ...)
         }
 
         case GF_EVENT_CLEANUP:
-            conf = this->private;
             victim_name = gf_strdup(victim->name);
             if (!victim_name) {
                 gf_smsg(this->name, GF_LOG_ERROR, ENOMEM, PS_MSG_NO_MEMORY,
@@ -1710,6 +1739,23 @@ server_notify(xlator_t *this, int32_t event, void *data, ...)
                 }
             }
             GF_FREE(victim_name);
+            break;
+        case GF_EVENT_SIGHUP:
+            if (conf->volfile_dir) {
+                pthread_mutex_lock(&conf->mutex);
+                {
+                    list_for_each_entry(xprt, &conf->xprt_list, list)
+                    {
+                        /* TODO: optimize by sending signal to only those who
+                         * fetched data once */
+                        rpcsvc_callback_submit(conf->rpc, xprt,
+                                               &server_cbk_prog,
+                                               GF_CBK_FETCHSPEC, NULL, 0, NULL);
+                    }
+                }
+                pthread_mutex_unlock(&conf->mutex);
+            }
+            default_notify(this, event, data);
             break;
 
         default:
@@ -1913,6 +1959,11 @@ struct volume_options server_options[] = {
      .default_value = "off",
      .description = "strict-auth-accept reject connection with out"
                     "a valid username and password."},
+    /* As we append '${volid}.vol' at the end of this path, no systemfiles
+       would be exposed through this option */
+    {.key = {"volspec-directory", "volfile-path"},
+     .type = GF_OPTION_TYPE_PATH,
+     .default_value = NULL},
     {.key = {NULL}},
 };
 

@@ -384,7 +384,7 @@ glusterd_unset_lock_owner(uuid_t owner)
 }
 
 gf_boolean_t
-glusterd_is_fuse_available()
+glusterd_is_fuse_available(void)
 {
     int fd = 0;
 
@@ -3227,13 +3227,14 @@ out:
 }
 
 static int
-glusterd_dict_searialize(dict_t *dict_arr[], int count, int totcount, char *buf)
+glusterd_dict_searialize(dict_t *dict_arr[], unsigned int count,
+                         unsigned int totcount, char *buf)
 {
     int i = 0;
-    int32_t keylen = 0;
-    int64_t netword = 0;
+    uint32_t keylen = 0;
+    uint32_t netword = 0;
     data_pair_t *pair = NULL;
-    int dict_count = 0;
+    unsigned int dict_count = 0;
     int ret = 0;
 
     netword = htobe32(totcount);
@@ -3249,13 +3250,6 @@ glusterd_dict_searialize(dict_t *dict_arr[], int count, int totcount, char *buf)
                     gf_msg("glusterd", GF_LOG_ERROR, 0,
                            LG_MSG_PAIRS_LESS_THAN_COUNT,
                            "less than count data pairs found!");
-                    ret = -1;
-                    goto out;
-                }
-
-                if (!pair->key) {
-                    gf_msg("glusterd", GF_LOG_ERROR, 0, LG_MSG_NULL_PTR,
-                           "pair->key is null!");
                     ret = -1;
                     goto out;
                 }
@@ -3299,12 +3293,12 @@ out:
 }
 
 static int
-glusterd_dict_arr_serialize(dict_t *dict_arr[], int count, char **buf,
+glusterd_dict_arr_serialize(dict_t *dict_arr[], unsigned int count, char **buf,
                             u_int *length)
 {
     ssize_t len = 0;
     int i = 0;
-    int totcount = 0;
+    unsigned int totcount = 0;
     int ret = 0;
 
     for (i = 0; i < count; i++) {
@@ -3350,7 +3344,7 @@ glusterd_add_volumes_to_export_dict(dict_t *peer_data, char **buf,
     int32_t count = 0;
     glusterd_dict_ctx_t ctx = {0};
     xlator_t *this = THIS;
-    int totthread = 0;
+    unsigned int totthread = 0;
     int volcnt = 0;
     int start = 1;
     int endindex = 0;
@@ -5339,7 +5333,7 @@ glusterd_pending_node_put_rpc(glusterd_pending_node_t *pending_node)
 
 #ifdef BUILD_GNFS
 void
-glusterd_nfs_pmap_deregister()
+glusterd_nfs_pmap_deregister(void)
 {
     if (pmap_unset(MOUNT_PROGRAM, MOUNTV3_VERSION))
         gf_msg("glusterd", GF_LOG_INFO, 0, GD_MSG_DEREGISTER_SUCCESS,
@@ -5424,7 +5418,7 @@ out:
 }
 
 gf_boolean_t
-glusterd_are_all_volumes_stopped()
+glusterd_are_all_volumes_stopped(void)
 {
     glusterd_conf_t *priv = NULL;
     glusterd_volinfo_t *voliter = NULL;
@@ -5442,7 +5436,7 @@ glusterd_are_all_volumes_stopped()
 }
 
 gf_boolean_t
-glusterd_all_volumes_with_quota_stopped()
+glusterd_all_volumes_with_quota_stopped(void)
 {
     glusterd_conf_t *priv = NULL;
     glusterd_volinfo_t *voliter = NULL;
@@ -8083,27 +8077,11 @@ glusterd_recreate_volfiles(glusterd_conf_t *conf)
 
     cds_list_for_each_entry(volinfo, &conf->volumes, vol_list)
     {
-        ret = generate_brick_volfiles(volinfo);
+        ret = glusterd_create_volfiles(volinfo);
         if (ret) {
             gf_msg("glusterd", GF_LOG_ERROR, 0, GD_MSG_VOLFILE_CREATE_FAIL,
                    "Failed to "
-                   "regenerate brick volfiles for %s",
-                   volinfo->volname);
-            op_ret = ret;
-        }
-        ret = generate_client_volfiles(volinfo, GF_CLIENT_TRUSTED);
-        if (ret) {
-            gf_msg("glusterd", GF_LOG_ERROR, 0, GD_MSG_VOLFILE_CREATE_FAIL,
-                   "Failed to "
-                   "regenerate trusted client volfiles for %s",
-                   volinfo->volname);
-            op_ret = ret;
-        }
-        ret = generate_client_volfiles(volinfo, GF_CLIENT_OTHER);
-        if (ret) {
-            gf_msg("glusterd", GF_LOG_ERROR, 0, GD_MSG_VOLFILE_CREATE_FAIL,
-                   "Failed to "
-                   "regenerate client volfiles for %s",
+                   "regenerate volfile(s) for %s",
                    volinfo->volname);
             op_ret = ret;
         }
@@ -8604,25 +8582,24 @@ int
 glusterd_get_dummy_client_filepath(char *filepath, glusterd_volinfo_t *volinfo,
                                    gf_transport_type type)
 {
-    int ret = 0;
+    char *suffix;
+    int32_t ret;
 
-    switch (type) {
-        case GF_TRANSPORT_TCP:
-        case GF_TRANSPORT_BOTH_TCP_RDMA:
-            snprintf(filepath, PATH_MAX, "/tmp/%s.tcp-fuse.vol",
-                     volinfo->volname);
-            break;
-
-        case GF_TRANSPORT_RDMA:
-            snprintf(filepath, PATH_MAX, "/tmp/%s.rdma-fuse.vol",
-                     volinfo->volname);
-            break;
-        default:
-            ret = -1;
-            break;
+    if ((type == GF_TRANSPORT_TCP) || (type == GF_TRANSPORT_BOTH_TCP_RDMA)) {
+        suffix = "tcp-fuse";
+    } else if (type == GF_TRANSPORT_RDMA) {
+        suffix = "rdma-fuse";
+    } else {
+        return -1;
     }
 
-    return ret;
+    ret = snprintf(filepath, PATH_MAX, "/tmp/%s.%s.%d.vol", volinfo->volname,
+                   suffix, getpid());
+    if ((ret < 0) || (ret >= PATH_MAX)) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static int
@@ -8764,7 +8741,7 @@ glusterd_volinfo_reset_defrag_stats(glusterd_volinfo_t *volinfo)
 }
 
 gf_boolean_t
-glusterd_is_local_brick(xlator_t *this, glusterd_volinfo_t *volinfo,
+glusterd_is_local_brick(glusterd_volinfo_t *volinfo,
                         glusterd_brickinfo_t *brickinfo)
 {
     gf_boolean_t local = _gf_false;
@@ -10174,7 +10151,7 @@ _heal_volume_add_shd_rsp(dict_t *this, char *key, data_t *value, void *data)
         brickinfo = glusterd_get_brickinfo_by_position(volinfo, brick_id);
         if (!brickinfo)
             goto out;
-        if (!glusterd_is_local_brick(rsp_ctx->this, volinfo, brickinfo))
+        if (!glusterd_is_local_brick(volinfo, brickinfo))
             goto out;
     }
     new_value = data_copy(value);
@@ -10248,7 +10225,7 @@ _heal_volume_add_shd_rsp_of_statistics(dict_t *this, char *key, data_t *value,
     brickinfo = glusterd_get_brickinfo_by_position(volinfo, brick_id);
     if (!brickinfo)
         goto out;
-    if (!glusterd_is_local_brick(rsp_ctx->this, volinfo, brickinfo))
+    if (!glusterd_is_local_brick(volinfo, brickinfo))
         goto out;
 
     new_value = data_copy(value);
@@ -11134,7 +11111,6 @@ glusterd_enable_default_options(glusterd_volinfo_t *volinfo, char *option)
     conf = this->private;
     GF_ASSERT(conf);
 
-#ifdef GD_OP_VERSION_3_8_0
     if (conf->op_version >= GD_OP_VERSION_3_8_0) {
         /* nfs.disable needs to be enabled for new volumes with
          * >= gluster version 3.7 (for now) 3.8 later
@@ -11152,37 +11128,33 @@ glusterd_enable_default_options(glusterd_volinfo_t *volinfo, char *option)
             }
         }
     }
-#endif
 
-    if (conf->op_version >= GD_OP_VERSION_3_7_0) {
-        /* Set needed volume options in volinfo->dict
-         * For ex.,
-         *
-         * if (!option || !strcmp("someoption", option) {
-         *      ret = dict_set_str(volinfo->dict, "someoption", "on");
-         *      ...
-         * }
-         * */
+    /* Set needed volume options in volinfo->dict
+     * For ex.,
+     *
+     * if (!option || !strcmp("someoption", option) {
+     *      ret = dict_set_str(volinfo->dict, "someoption", "on");
+     *      ...
+     * }
+     * */
 
-        /* Option 'features.quota-deem-statfs' should not be turned off
-         * with 'gluster volume reset <VOLNAME>', since quota features
-         * can be reset only with 'gluster volume quota <VOLNAME>
-         * disable'.
-         */
+    /* Option 'features.quota-deem-statfs' should not be turned off
+     * with 'gluster volume reset <VOLNAME>', since quota features
+     * can be reset only with 'gluster volume quota <VOLNAME>
+     * disable'.
+     */
 
-        if (!option || !strcmp("features.quota-deem-statfs", option)) {
-            if (glusterd_is_volume_quota_enabled(volinfo)) {
-                ret = dict_set_dynstr_with_alloc(
-                    volinfo->dict, "features.quota-deem-statfs", "on");
-                if (ret) {
-                    gf_msg(this->name, GF_LOG_ERROR, -ret,
-                           GD_MSG_DICT_SET_FAILED,
-                           "Failed to set option "
-                           "'features.quota-deem-statfs' "
-                           "on volume %s",
-                           volinfo->volname);
-                    goto out;
-                }
+    if (!option || !strcmp("features.quota-deem-statfs", option)) {
+        if (glusterd_is_volume_quota_enabled(volinfo)) {
+            ret = dict_set_dynstr_with_alloc(
+                volinfo->dict, "features.quota-deem-statfs", "on");
+            if (ret) {
+                gf_msg(this->name, GF_LOG_ERROR, -ret, GD_MSG_DICT_SET_FAILED,
+                       "Failed to set option "
+                       "'features.quota-deem-statfs' "
+                       "on volume %s",
+                       volinfo->volname);
+                goto out;
             }
         }
     }

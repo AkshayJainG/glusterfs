@@ -515,7 +515,7 @@ afr_lock_heal_do(call_frame_t *frame, afr_private_t *priv,
         wind_on[i] = 1;
     }
 
-    current_event_gen = alloca(priv->child_count);
+    current_event_gen = alloca(priv->child_count * sizeof(*current_event_gen));
     memcpy(current_event_gen, info->child_up_event_gen,
            priv->child_count * sizeof *current_event_gen);
     AFR_ONLIST(wind_on, frame, afr_lock_heal_cbk, lk, info->fd, info->cmd,
@@ -1596,19 +1596,17 @@ afr_accuse_smallfiles(afr_private_t *priv, struct afr_reply *replies,
 }
 
 static int
-afr_readables_fill(call_frame_t *frame, xlator_t *this, inode_t *inode,
+afr_readables_fill(afr_local_t *local, xlator_t *this, inode_t *inode,
                    unsigned char *data_accused, unsigned char *metadata_accused,
                    unsigned char *data_readable,
                    unsigned char *metadata_readable, struct afr_reply *replies)
 {
-    afr_local_t *local = NULL;
     afr_private_t *priv = NULL;
     dict_t *xdata = NULL;
     int i = 0;
     int ret = 0;
     ia_type_t ia_type = IA_INVAL;
 
-    local = frame->local;
     priv = this->private;
 
     for (i = 0; i < priv->child_count; i++) {
@@ -1672,10 +1670,9 @@ afr_readables_fill(call_frame_t *frame, xlator_t *this, inode_t *inode,
 }
 
 int
-afr_replies_interpret(call_frame_t *frame, xlator_t *this, inode_t *inode,
+afr_replies_interpret(afr_local_t *local, xlator_t *this, inode_t *inode,
                       gf_boolean_t *start_heal)
 {
-    afr_local_t *local = NULL;
     afr_private_t *priv = NULL;
     struct afr_reply *replies = NULL;
     int event_generation = 0;
@@ -1686,7 +1683,6 @@ afr_replies_interpret(call_frame_t *frame, xlator_t *this, inode_t *inode,
     unsigned char *metadata_readable = NULL;
     int ret = 0;
 
-    local = frame->local;
     priv = this->private;
     replies = local->replies;
     event_generation = local->event_generation;
@@ -1696,7 +1692,7 @@ afr_replies_interpret(call_frame_t *frame, xlator_t *this, inode_t *inode,
     metadata_accused = alloca0(priv->child_count);
     metadata_readable = alloca0(priv->child_count);
 
-    ret = afr_readables_fill(frame, this, inode, data_accused, metadata_accused,
+    ret = afr_readables_fill(local, this, inode, data_accused, metadata_accused,
                              data_readable, metadata_readable, replies);
 
     for (i = 0; i < priv->child_count; i++) {
@@ -1854,7 +1850,7 @@ afr_inode_refresh_done(call_frame_t *frame, xlator_t *this, int error)
         goto refresh_done;
     }
 
-    ret = afr_replies_interpret(frame, this, local->refreshinode, &start_heal);
+    ret = afr_replies_interpret(local, this, local->refreshinode, &start_heal);
 
     if (ret && afr_selfheal_enabled(this) && start_heal) {
         heal_frame = afr_frame_create(this, NULL);
@@ -2727,7 +2723,8 @@ afr_frame_return(call_frame_t *frame)
     return call_count;
 }
 
-static char *afr_ignore_xattrs[] = {GF_SELINUX_XATTR_KEY, QUOTA_SIZE_KEY, NULL};
+static char *afr_ignore_xattrs[] = {GF_SELINUX_XATTR_KEY, QUOTA_SIZE_KEY,
+                                    SQUOTA_SIZE_KEY, SQUOTA_LIMIT_KEY, NULL};
 
 gf_boolean_t
 afr_is_xattr_ignorable(char *key)
@@ -3033,7 +3030,7 @@ afr_lookup_done(call_frame_t *frame, xlator_t *this)
         */
         gf_uuid_copy(args.gfid, read_gfid);
         args.ia_type = ia_type;
-        ret = afr_replies_interpret(frame, this, local->inode, NULL);
+        ret = afr_replies_interpret(local, this, local->inode, NULL);
         read_subvol = afr_read_subvol_decide(local->inode, this, &args,
                                              readable);
         if (read_subvol == -1)
@@ -3620,7 +3617,7 @@ afr_discover_unwind(call_frame_t *frame, xlator_t *this)
     if (!afr_has_quorum(success_replies, priv, frame))
         goto unwind;
 
-    ret = afr_replies_interpret(frame, this, local->inode, NULL);
+    ret = afr_replies_interpret(local, this, local->inode, NULL);
     if (ret) {
         afr_inode_need_refresh_set(local->inode, this);
     }
@@ -4049,25 +4046,14 @@ _afr_cleanup_fd_ctx(xlator_t *this, afr_fd_ctx_t *fd_ctx)
     return;
 }
 
-int
+void
 afr_cleanup_fd_ctx(xlator_t *this, fd_t *fd)
 {
-    uint64_t ctx = 0;
     afr_fd_ctx_t *fd_ctx = NULL;
-    int ret = 0;
 
-    ret = fd_ctx_get(fd, this, &ctx);
-    if (ret < 0)
-        goto out;
-
-    fd_ctx = (afr_fd_ctx_t *)(long)ctx;
-
-    if (fd_ctx) {
+    fd_ctx = fd_ctx_get_ptr(fd, this);
+    if (fd_ctx)
         _afr_cleanup_fd_ctx(this, fd_ctx);
-    }
-
-out:
-    return 0;
 }
 
 int
@@ -4127,16 +4113,12 @@ out:
 static afr_fd_ctx_t *
 __afr_fd_ctx_get(fd_t *fd, xlator_t *this)
 {
-    uint64_t ctx = 0;
-    int ret = 0;
     afr_fd_ctx_t *fd_ctx = NULL;
 
-    ret = __fd_ctx_get(fd, this, &ctx);
+    fd_ctx = __fd_ctx_get_ptr(fd, this);
 
-    if (ret < 0) {
+    if (!fd_ctx) {
         fd_ctx = __afr_fd_ctx_set(this, fd);
-    } else {
-        fd_ctx = (afr_fd_ctx_t *)(long)ctx;
     }
     return fd_ctx;
 }
@@ -5111,9 +5093,32 @@ afr_lk_cbk(call_frame_t *frame, void *cookie, xlator_t *this, int32_t op_ret,
     child_index = (long)cookie;
 
     afr_common_lock_cbk(frame, cookie, this, op_ret, op_errno, xdata);
-    if (op_ret < 0 && op_errno == EAGAIN) {
+
+    /* We have two options here to handle EINTR
+       1) Either Ignore EINTR and wind a call on other subvolume
+       2) or Unlock the already granted lock in the previous children and return
+       the error.
+
+       For EINTR we can't chose first option because EINTR is not a regular
+       error. The user expecation is whole lock should be clear after receive an
+       interrupt. However there is an issue if we do unlock already granted
+       locks. Locks xlator implements posix locks as they are defined by the
+       posix standard. This means that granted locks are "combined" with other
+       existing granted locks. Unfortunately, in some cases this makes it
+       impossible to revoke an already granted lock without unwanted side
+       effects. For example consider a process that takes two read locks on the
+       same file, but their ranges overlap a bit. Once both of them are granted
+       in one brick, revoking any of them because of an interrupt will cause the
+       overlapped range to be unlocked, even if one of the locks is still
+       granted (from the point of view of the user, one of the locks has never
+       been granted because it returned EINTR, so the user still expects that
+       the other lock still covers the overlapping region). For the time being
+       we have decided consider EINTR as same EAGAIN.
+    */
+
+    if (op_ret < 0 && ((op_errno == EAGAIN) || (op_errno == EINTR))) {
         local->op_ret = -1;
-        local->op_errno = EAGAIN;
+        local->op_errno = op_errno;
 
         afr_lk_unlock(frame, this);
         return 0;
@@ -7517,7 +7522,7 @@ afr_write_subvol_set(call_frame_t *frame, xlator_t *this)
     metadata_readable = alloca0(priv->child_count);
     event = local->event_generation;
 
-    afr_readables_fill(frame, this, local->inode, data_accused,
+    afr_readables_fill(local, this, local->inode, data_accused,
                        metadata_accused, data_readable, metadata_readable,
                        NULL);
 

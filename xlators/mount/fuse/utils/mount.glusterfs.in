@@ -282,6 +282,10 @@ start_glusterfs ()
         cmd_line=$(echo "$cmd_line --lru-limit=$lru_limit");
     fi
 
+    if [ -n "$inode_table_size" ]; then
+        cmd_line=$(echo "$cmd_line --inode-table-size=$inode_table_size");
+    fi
+
     if [ -n "$invalidate_limit" ]; then
         cmd_line=$(echo "$cmd_line --invalidate-limit=$invalidate_limit");
     fi
@@ -302,11 +306,7 @@ start_glusterfs ()
         cmd_line=$(echo "$cmd_line --fuse-mountopts=$fuse_mountopts");
     fi
 
-    if [ -n "${xlator_options}" ]; then
-        for xlator_option in "${xlator_options[@]}"; do
-            cmd_line=$(echo "$cmd_line --xlator-option=$xlator_option");
-        done
-    fi
+    cmd_line="${cmd_line}${xlator_options}"
 
     if [ -n "$kernel_writeback_cache" ]; then
         cmd_line=$(echo "$cmd_line --kernel-writeback-cache=$kernel_writeback_cache");
@@ -322,6 +322,14 @@ start_glusterfs ()
 
     if [ -n "$fuse_flush_handle_interrupt" ]; then
         cmd_line=$(echo "$cmd_line --fuse-flush-handle-interrupt=$fuse_flush_handle_interrupt");
+    fi
+
+    if [ -n "$fuse_setlk_handle_interrupt" ]; then
+        cmd_line=$(echo "$cmd_line --fuse-setlk-handle-interrupt=$fuse_setlk_handle_interrupt");
+    fi
+
+    if [ -n "$fuse_handle_copy_file_range" ]; then
+        cmd_line=$(echo "$cmd_line --fuse-handle-copy_file_range=$fuse_handle_copy_file_range");
     fi
 
     if [ -n "$process_name" ]; then
@@ -556,6 +564,9 @@ with_options()
         "lru-limit")
             lru_limit=$value
             ;;
+        "inode-table-size")
+            inode_table_size=$value
+            ;;
         "invalidate-limit")
             invalidate_limit=$value
             ;;
@@ -578,7 +589,7 @@ with_options()
             oom_score_adj=$value
             ;;
         "xlator-option")
-            xlator_options+=($value)
+            xlator_options="${xlator_options} --xlator-option ${value}"
             ;;
         "fuse-mountopts")
             fuse_mountopts=$value
@@ -594,7 +605,7 @@ with_options()
             ;;
         "auto-invalidation")
             fuse_auto_invalidation=$value
-	    ;;
+            ;;
         "no-root-squash")
             if [ $value = "yes" ] ||
                 [ $value = "on" ] ||
@@ -620,6 +631,12 @@ with_options()
             ;;
         "fuse-flush-handle-interrupt")
             fuse_flush_handle_interrupt=$value
+            ;;
+        "fuse-setlk-handle-interrupt")
+            fuse_setlk_handle_interrupt=$value
+            ;;
+        "fuse-handle-copy_file_range")
+            fuse_handle_copy_file_range=$value
             ;;
         "fuse-dev-eperm-ratelimit-ns")
             fuse_dev_eperm_ratelimit_ns=$value
@@ -836,7 +853,7 @@ EOF
         }
     }
 
-    grep_ret=$(echo ${mount_point} | grep '^\-o');
+    grep_ret=$(echo ${mount_point} | grep '^-o');
     [ "x" != "x${grep_ret}" ] && {
         cat <<EOF >&2
 ERROR: -o options cannot be specified in either first two arguments..

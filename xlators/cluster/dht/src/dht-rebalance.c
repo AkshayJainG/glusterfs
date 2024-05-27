@@ -25,9 +25,6 @@
 #define ESTIMATE_START_INTERVAL 600 /* 10 mins */
 #define HARDLINK_MIG_INPROGRESS -2
 #define SKIP_MIGRATION_FD_POSITIVE -3
-#ifndef MAX
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-#endif
 
 #define GF_CRAWL_INDEX_MOVE(idx, sv_cnt)                                       \
     {                                                                          \
@@ -665,8 +662,8 @@ __dht_rebalance_create_dst_file(xlator_t *this, xlator_t *to, xlator_t *from,
             goto out;
         }
     } else {
-        ret = syncop_create(to, loc, O_RDWR, DHT_LINKFILE_MODE, fd, &new_stbuf,
-                            dict, NULL);
+        ret = syncop_create(to, loc, O_RDWR, DHT_LINKFILE_MODE, fd, NULL, dict,
+                            NULL);
         if (ret < 0) {
             gf_msg(this->name, GF_LOG_ERROR, -ret, DHT_MSG_MIGRATE_FILE_FAILED,
                    "failed to create %s on %s", loc->path, to->name);
@@ -2307,6 +2304,9 @@ out:
     if (xdata)
         dict_unref(xdata);
 
+    if (meta_dict)
+        dict_unref(meta_dict);
+
     loc_wipe(&tmp_loc);
     loc_wipe(&parent_loc);
 
@@ -2619,6 +2619,7 @@ gf_defrag_migrate_single_file(xlator_t *this, dht_container_t *rebal_entry)
     inode_t *inode = NULL;
     xlator_t *hashed_subvol = NULL;
     xlator_t *cached_subvol = NULL;
+    xlator_t *linkfile_subvol = NULL;
     call_frame_t *statfs_frame = NULL;
     xlator_t *old_THIS = NULL;
     data_t *tmp = NULL;
@@ -2750,14 +2751,38 @@ gf_defrag_migrate_single_file(xlator_t *this, dht_container_t *rebal_entry)
     }
 
     if (hashed_subvol == cached_subvol) {
-        if (is_linkfile == 1) {
-            i = rebal_entry->local_subvol_index;
-            ret = syncop_unlink(conf->local_subvols[i], &entry_loc, NULL, NULL);
+        i = rebal_entry->local_subvol_index;
+        linkfile_subvol = conf->local_subvols[i];
+        if (is_linkfile == 1 && hashed_subvol != linkfile_subvol) {
+            ret = syncop_unlink(linkfile_subvol, &entry_loc, NULL, NULL);
             gf_msg_debug(this->name, 0,
                          "Unlink linkfile"
                          " %s on subvol: %s status is %d",
-                         entry_loc.path, conf->local_subvols[i]->name, ret);
+                         entry_loc.path, linkfile_subvol->name, ret);
         }
+        ret = 0;
+        goto out;
+    }
+    if (is_linkfile == 1) {
+        linkfile_subvol = conf->local_subvols[i];
+        /* No need to migrate the linkfile. Following scenario can happen
+         *
+          if (hashed_subvol != linkfile_subvol) {
+               * This should be a stale linkfile and the above lookup
+               * should be deleted it, so we should be fine to skip it,
+               * May be we can do a verification to make sure that the
+               * linkfiles are deleted *
+          } else {
+              * This means that we have a linkfile that is valid, either the
+               * migration is still on going triggered by the actual data file,
+               * hence we don't need to migrate this file.*
+          }
+          */
+        gf_msg_debug(this->name, 0,
+                     "skipping linkfile migration"
+                     " %s on subvol: %s",
+                     entry_loc.path, linkfile_subvol->name);
+
         ret = 0;
         goto out;
     }
@@ -3131,7 +3156,8 @@ gf_defrag_get_entry(xlator_t *this, int i, dht_container_t **container,
         dir_dfmeta->iterator[i] = dir_dfmeta->iterator[i]->next;
 
         dir_dfmeta->offset_var[i].offset = df_entry->d_off;
-        if (!strcmp(df_entry->d_name, ".") || !strcmp(df_entry->d_name, ".."))
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(df_entry))
             continue;
 
         if (IA_ISDIR(df_entry->d_stat.ia_type)) {
@@ -3679,8 +3705,8 @@ gf_defrag_fix_layout(xlator_t *this, gf_defrag_info_t *defrag, loc_t *loc,
             }
 
             offset = entry->d_off;
-
-            if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            /* skip . and .. */
+            if (inode_dir_or_parentdir(entry))
                 continue;
 
             if ((DT_DIR != entry->d_type) && (DT_UNKNOWN != entry->d_type)) {
@@ -4057,10 +4083,8 @@ gf_defrag_estimates_init(xlator_t *this, loc_t *loc, pthread_t *filecnt_thread)
                            (void *)defrag, "dhtfcnt");
 
     if (ret) {
-        gf_msg(this->name, GF_LOG_ERROR, ret, 0,
-               "Failed to "
-               "create the file counter thread ");
-        ret = -1;
+        gf_log(this->name, GF_LOG_ERROR,
+               "Failed to create the file counter thread ");
         goto out;
     }
     ret = 0;
@@ -4091,7 +4115,7 @@ gf_defrag_parallel_migration_init(xlator_t *this, gf_defrag_info_t *defrag,
 
     INIT_LIST_HEAD(&(defrag->queue[0].list));
 
-    thread_spawn_count = MAX(MAX_REBAL_THREADS, 4);
+    thread_spawn_count = max(sysconf(_SC_NPROCESSORS_ONLN), 4);
 
     gf_msg_debug(this->name, 0, "thread_spawn_count: %d", thread_spawn_count);
 
@@ -4179,12 +4203,6 @@ gf_defrag_start_crawl(void *data)
     loc_t loc = {
         0,
     };
-    struct iatt iatt = {
-        0,
-    };
-    struct iatt parent = {
-        0,
-    };
     int thread_index = 0;
     pthread_t *tid = NULL;
     pthread_t filecnt_thread;
@@ -4216,7 +4234,7 @@ gf_defrag_start_crawl(void *data)
 
     /* fix-layout on '/' first */
 
-    ret = syncop_lookup(this, &loc, &iatt, &parent, NULL, NULL);
+    ret = syncop_lookup(this, &loc, NULL, NULL, NULL, NULL);
 
     if (ret) {
         gf_msg(this->name, GF_LOG_ERROR, -ret, DHT_MSG_REBALANCE_START_FAILED,

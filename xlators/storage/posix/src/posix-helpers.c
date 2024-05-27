@@ -129,10 +129,13 @@ posix_handle_georep_xattrs(call_frame_t *frame, const char *name, int *op_errno,
     int ret = 0;
     int pid = 1;
     gf_boolean_t filter_xattr = _gf_true;
-    static const char *georep_xattr[] = {
-        "*.glusterfs.*.stime",       "*.glusterfs.*.xtime",
-        "*.glusterfs.lockinfo",      "*.glusterfs.*.entry_stime",
-        "*.glusterfs.volume-mark.*", NULL};
+    static const char *georep_xattr[] = {"*.glusterfs.*.stime",
+                                         "*.glusterfs.*.xtime",
+                                         "*.glusterfs.lockinfo",
+                                         "*.glusterfs.*.entry_stime",
+                                         "*.glusterfs.volume-mark.*",
+                                         "trusted.SGI_*",
+                                         NULL};
 
     if (!name) {
         /* No need to do anything here */
@@ -778,9 +781,7 @@ posix_pstat(xlator_t *this, inode_t *inode, uuid_t gfid, const char *path,
             struct iatt *buf_p, gf_boolean_t inode_locked,
             gf_boolean_t fetch_time)
 {
-    struct stat lstatbuf = {
-        0,
-    };
+    struct stat lstatbuf;
     struct iatt stbuf = {
         0,
     };
@@ -790,14 +791,8 @@ posix_pstat(xlator_t *this, inode_t *inode, uuid_t gfid, const char *path,
 
     priv = this->private;
 
-    if (gfid && !gf_uuid_is_null(gfid))
-        gf_uuid_copy(stbuf.ia_gfid, gfid);
-    else
-        posix_fill_gfid_path(path, &stbuf);
-    stbuf.ia_flags |= IATT_GFID;
-
     ret = sys_lstat(path, &lstatbuf);
-    if (ret == -1) {
+    if (ret != 0) {
         if (errno != ENOENT) {
             op_errno = errno;
             gf_msg(this->name, GF_LOG_WARNING, errno, P_MSG_LSTAT_FAILED,
@@ -819,6 +814,12 @@ posix_pstat(xlator_t *this, inode_t *inode, uuid_t gfid, const char *path,
 
     if (!S_ISDIR(lstatbuf.st_mode))
         lstatbuf.st_nlink--;
+
+    if (gfid && !gf_uuid_is_null(gfid))
+        gf_uuid_copy(stbuf.ia_gfid, gfid);
+    else
+        posix_fill_gfid_path(path, &stbuf);
+    stbuf.ia_flags |= IATT_GFID;
 
     iatt_from_stat(&stbuf, &lstatbuf);
 
@@ -1818,7 +1819,6 @@ static int
 __posix_fd_ctx_get(fd_t *fd, xlator_t *this, struct posix_fd **pfd_p,
                    int *op_errno_p)
 {
-    uint64_t tmp_pfd = 0;
     struct posix_fd *pfd = NULL;
     int ret = -1;
     char *real_path = NULL;
@@ -1829,11 +1829,9 @@ __posix_fd_ctx_get(fd_t *fd, xlator_t *this, struct posix_fd **pfd_p,
 
     struct posix_private *priv = NULL;
 
-    priv = this->private;
-
-    ret = __fd_ctx_get(fd, this, &tmp_pfd);
-    if (ret == 0) {
-        pfd = (void *)(long)tmp_pfd;
+    pfd = __fd_ctx_get_ptr(fd, this);
+    if (pfd) {
+        ret = 0;
         goto out;
     }
     if (!fd_is_anonymous(fd)) {
@@ -1882,6 +1880,7 @@ __posix_fd_ctx_get(fd_t *fd, xlator_t *this, struct posix_fd **pfd_p,
     if (fd->inode->ia_type == IA_IFREG) {
         _fd = open(real_path, fd->flags);
         if ((_fd == -1) && (errno == ENOENT)) {
+            priv = this->private;
             POSIX_GET_FILE_UNLINK_PATH(priv->base_path, fd->inode->gfid,
                                        unlink_path);
             _fd = open(unlink_path, fd->flags);

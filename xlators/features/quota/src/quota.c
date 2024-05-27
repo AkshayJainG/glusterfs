@@ -185,7 +185,7 @@ out:
 }
 
 static quota_local_t *
-quota_local_new()
+quota_local_new(void)
 {
     quota_local_t *local = NULL;
     local = mem_get0(THIS->local_pool);
@@ -1048,7 +1048,10 @@ quota_check_limit_continuation(struct list_head *parents, inode_t *inode,
         goto out;
     }
 
-    list_for_each_entry(entry, parents, next) { parent_count++; }
+    list_for_each_entry(entry, parents, next)
+    {
+        parent_count++;
+    }
 
     LOCK(&par_local->lock);
     {
@@ -1085,7 +1088,7 @@ quota_check_object_limit(call_frame_t *frame, quota_inode_ctx_t *ctx,
                          quota_local_t *local, gf_boolean_t *skip_check)
 {
     int32_t ret = -1;
-    uint32_t timeout = 0;
+    uint64_t timeout = 0;
     char need_validate = 0;
     gf_boolean_t hard_limit_exceeded = 0;
     int64_t object_aggr_count = 0;
@@ -1151,7 +1154,7 @@ quota_check_size_limit(call_frame_t *frame, quota_inode_ctx_t *ctx,
                        quota_local_t *local, gf_boolean_t *skip_check)
 {
     int32_t ret = -1;
-    uint32_t timeout = 0;
+    uint64_t timeout = 0;
     char need_validate = 0;
     gf_boolean_t hard_limit_exceeded = 0;
     int64_t space_available = 0;
@@ -4366,7 +4369,7 @@ quota_get_limit_dir_continuation(struct list_head *parents, inode_t *inode,
         goto out;
     }
 
-    entry = list_entry(parents, quota_dentry_t, next);
+    entry = list_first_entry(parents, quota_dentry_t, next);
     parent = inode_find(inode->table, entry->par);
 
     quota_get_limit_dir(frame, parent, this);
@@ -4547,8 +4550,8 @@ quota_readdirp_cbk(call_frame_t *frame, void *cookie, xlator_t *this,
 
     list_for_each_entry(entry, &entries->list, list)
     {
-        if ((strcmp(entry->d_name, ".") == 0) ||
-            (strcmp(entry->d_name, "..") == 0) || entry->inode == NULL)
+        /* skip . and .. */
+        if (entry->inode == NULL || inode_dir_or_parentdir(entry))
             continue;
 
         gf_uuid_copy(loc.gfid, entry->d_stat.ia_gfid);

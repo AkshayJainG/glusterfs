@@ -2758,8 +2758,8 @@ br_stub_readdirp_cbk(call_frame_t *frame, void *cookie, xlator_t *this,
 
     list_for_each_entry(entry, &entries->list, list)
     {
-        if ((strcmp(entry->d_name, ".") == 0) ||
-            (strcmp(entry->d_name, "..") == 0))
+        /* skip . and .. */
+        if (inode_dir_or_parentdir(entry))
             continue;
 
         if (!IA_ISREG(entry->d_stat.ia_type))
@@ -2859,7 +2859,6 @@ unwind:
     if (frame->local == (void *)0x1)
         frame->local = NULL;
     STACK_UNWIND_STRICT(readdirp, frame, -1, op_errno, NULL, NULL);
-    return 0;
 
 unref_dict:
     if (xref)
@@ -3411,7 +3410,6 @@ br_stub_release(xlator_t *this, fd_t *fd)
     inode_t *inode = NULL;
     unsigned long releaseversion = 0;
     br_stub_inode_ctx_t *ctx = NULL;
-    uint64_t tmp = 0;
     br_stub_fd_t *br_stub_fd = NULL;
     int32_t signinfo = 0;
 
@@ -3452,10 +3450,10 @@ unblock:
         br_stub_send_ipc_fop(this, fd, releaseversion, signinfo);
     }
 
-    ret = fd_ctx_del(fd, this, &tmp);
-    br_stub_fd = (br_stub_fd_t *)(long)tmp;
-
-    GF_FREE(br_stub_fd);
+    br_stub_fd = fd_ctx_del_ptr(fd, this);
+    if (br_stub_fd) {
+        GF_FREE(br_stub_fd);
+    }
 
     return 0;
 }
@@ -3464,14 +3462,12 @@ int32_t
 br_stub_releasedir(xlator_t *this, fd_t *fd)
 {
     br_stub_fd_t *fctx = NULL;
-    uint64_t ctx = 0;
     int ret = 0;
 
-    ret = fd_ctx_del(fd, this, &ctx);
-    if (ret < 0)
+    fctx = fd_ctx_del_ptr(fd, this);
+    if (!fctx)
         goto out;
 
-    fctx = (br_stub_fd_t *)(long)ctx;
     if (fctx->bad_object.dir) {
         ret = sys_closedir(fctx->bad_object.dir);
         if (ret)

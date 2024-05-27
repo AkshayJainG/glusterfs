@@ -30,19 +30,15 @@ struct client_ctx {
     void *ctx_value;
 };
 
+#define GF_CLIENTCTX_INITIAL_SIZE 8
+
 typedef struct _client {
-    struct {
-        /* e.g. protocol/server stashes its ctx here */
-        gf_lock_t lock;
-        unsigned short count;
-        struct client_ctx *ctx;
-    } scratch_ctx;
     gf_atomic_t bind;
     gf_atomic_t count;
     xlator_t *bound_xl;
     xlator_t *this;
     int tbl_index;
-    char *client_uid;
+    int32_t opversion;
     char *client_name;
     struct {
         int flavour;
@@ -56,12 +52,12 @@ typedef struct _client {
     char *subdir_mount;
     inode_t *subdir_inode;
     uuid_t subdir_gfid;
-    int32_t opversion;
     /* Variable to save fd_count for detach brick */
     gf_atomic_t fd_cnt;
+    gf_lock_t scratch_ctx_lock;
+    struct client_ctx scratch_ctx[GF_CLIENTCTX_INITIAL_SIZE];
+    char client_uid[];
 } client_t;
-
-#define GF_CLIENTCTX_INITIAL_SIZE 8
 
 struct client_table_entry {
     client_t *client;
@@ -71,9 +67,9 @@ typedef struct client_table_entry cliententry_t;
 
 struct clienttable {
     unsigned int max_clients;
+    int first_free;
     gf_lock_t lock;
     cliententry_t *cliententries;
-    int first_free;
     client_t *local;
 };
 typedef struct clienttable clienttable_t;
@@ -115,11 +111,11 @@ gf_client_dump_inodes(xlator_t *this);
 void *
 client_ctx_set(client_t *client, void *key, void *value);
 
-int
-client_ctx_get(client_t *client, void *key, void **value);
+void *
+client_ctx_get(client_t *client, void *key);
 
-int
-client_ctx_del(client_t *client, void *key, void **value);
+void *
+client_ctx_del(client_t *client, void *key);
 
 void
 client_ctx_dump(client_t *client, char *prefix);

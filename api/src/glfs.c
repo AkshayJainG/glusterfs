@@ -119,11 +119,6 @@ glusterfs_ctx_defaults_init(glusterfs_ctx_t *ctx)
     if (!ctx->dict_pool)
         goto err;
 
-    ctx->dict_pair_pool = mem_pool_new(data_pair_t,
-                                       GF_MEMPOOL_COUNT_OF_DATA_PAIR_T);
-    if (!ctx->dict_pair_pool)
-        goto err;
-
     ctx->dict_data_pool = mem_pool_new(data_t, GF_MEMPOOL_COUNT_OF_DATA_T);
     if (!ctx->dict_data_pool)
         goto err;
@@ -154,8 +149,6 @@ err:
             mem_pool_destroy(ctx->dict_pool);
         if (ctx->dict_data_pool)
             mem_pool_destroy(ctx->dict_data_pool);
-        if (ctx->dict_pair_pool)
-            mem_pool_destroy(ctx->dict_pair_pool);
         if (ctx->logbuf_pool)
             mem_pool_destroy(ctx->logbuf_pool);
     }
@@ -714,6 +707,7 @@ glfs_fd_new(struct glfs *fs)
     glfd->fs = fs;
 
     INIT_LIST_HEAD(&glfd->openfds);
+    INIT_LIST_HEAD(&glfd->entries);
 
     GF_REF_INIT(glfd, glfs_fd_destroy);
 
@@ -793,7 +787,7 @@ extern glusterfs_ctx_t *global_ctx;
 extern pthread_mutex_t global_ctx_mutex;
 
 static int
-glfs_init_global_ctx()
+glfs_init_global_ctx(void)
 {
     int ret = 0;
     glusterfs_ctx_t *ctx = NULL;
@@ -1198,8 +1192,6 @@ glusterfs_ctx_destroy(glusterfs_ctx_t *ctx)
         mem_pool_destroy(ctx->dict_pool);
     if (ctx->dict_data_pool)
         mem_pool_destroy(ctx->dict_data_pool);
-    if (ctx->dict_pair_pool)
-        mem_pool_destroy(ctx->dict_pair_pool);
     if (ctx->logbuf_pool)
         mem_pool_destroy(ctx->logbuf_pool);
 

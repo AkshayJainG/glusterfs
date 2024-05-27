@@ -3793,8 +3793,8 @@ shard_delete_shards(void *opaque)
             list_for_each_entry(entry, &entries.list, list)
             {
                 offset = entry->d_off;
-
-                if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+                /* skip . and .. */
+                if (inode_dir_or_parentdir(entry))
                     continue;
 
                 if (!entry->inode) {
@@ -4931,8 +4931,11 @@ shard_readv_do_cbk(call_frame_t *frame, void *cookie, xlator_t *this,
         goto out;
     }
 
-    if (local->op_ret >= 0)
+    if (local->op_ret >= 0) {
         local->op_ret += op_ret;
+        /* gnfs requires op_errno to determine is_eof */
+        local->op_errno = op_errno;
+    }
 
     shard_inode_ctx_get(anon_fd->inode, this, &ctx);
     block_num = ctx->block_num;
@@ -6091,9 +6094,9 @@ shard_fsync_shards_cbk(call_frame_t *frame, void *cookie, xlator_t *this,
                             SHARD_MASK_TIMES);
     }
     UNLOCK(&frame->lock);
-    fd_ctx_get(anon_fd, this, &fsync_count);
 out:
     if (anon_fd && (base_inode != anon_fd->inode)) {
+        fsync_count = fd_ctx_get(anon_fd, this);
         LOCK(&base_inode->lock);
         LOCK(&anon_fd->inode->lock);
         {

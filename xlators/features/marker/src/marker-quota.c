@@ -380,9 +380,6 @@ mq_are_xattrs_set(xlator_t *this, loc_t *loc, gf_boolean_t *contri_set,
     quota_meta_t meta = {
         0,
     };
-    struct iatt stbuf = {
-        0,
-    };
     dict_t *dict = NULL;
     dict_t *rsp_dict = NULL;
 
@@ -396,7 +393,7 @@ mq_are_xattrs_set(xlator_t *this, loc_t *loc, gf_boolean_t *contri_set,
     if (ret < 0)
         goto out;
 
-    ret = syncop_lookup(FIRST_CHILD(this), loc, &stbuf, NULL, dict, &rsp_dict);
+    ret = syncop_lookup(FIRST_CHILD(this), loc, NULL, NULL, dict, &rsp_dict);
     if (ret < 0) {
         gf_log_callingfn(
             this->name,
@@ -527,9 +524,6 @@ mq_get_dirty(xlator_t *this, loc_t *loc, int32_t *dirty)
     int8_t value = 0;
     dict_t *dict = NULL;
     dict_t *rsp_dict = NULL;
-    struct iatt stbuf = {
-        0,
-    };
 
     dict = dict_new();
     if (dict == NULL) {
@@ -543,7 +537,7 @@ mq_get_dirty(xlator_t *this, loc_t *loc, int32_t *dirty)
         goto out;
     }
 
-    ret = syncop_lookup(FIRST_CHILD(this), loc, &stbuf, NULL, dict, &rsp_dict);
+    ret = syncop_lookup(FIRST_CHILD(this), loc, NULL, NULL, dict, &rsp_dict);
     if (ret < 0) {
         gf_log_callingfn(
             this->name,
@@ -1116,8 +1110,8 @@ mq_synctask1(xlator_t *this, synctask_fn_t task, gf_boolean_t spawn, loc_t *loc,
     }
 
     if (spawn) {
-        ret = synctask_new1(this->ctx->env, 1024 * 16, task,
-                            mq_synctask_cleanup, NULL, args);
+        ret = synctask_new1(this->ctx->env, 0, task, mq_synctask_cleanup, NULL,
+                            args);
         if (ret) {
             gf_log(this->name, GF_LOG_ERROR,
                    "Failed to spawn "
@@ -1909,8 +1903,8 @@ mq_update_dirty_inode_task(void *opaque)
         list_for_each_entry(entry, &entries.list, list)
         {
             offset = entry->d_off;
-
-            if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            /* skip . and .. */
+            if (inode_dir_or_parentdir(entry))
                 continue;
 
             memset(&contri, 0, sizeof(contri));

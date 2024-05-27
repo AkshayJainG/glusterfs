@@ -45,7 +45,7 @@ struct dict_cmp {
     } while (0)
 
 static data_t *
-get_new_data()
+get_new_data(void)
 {
     data_t *data = NULL;
 
@@ -65,7 +65,7 @@ get_new_data()
 }
 
 static dict_t *
-get_new_dict_full()
+get_new_dict_full(void)
 {
     dict_t *dict = mem_get0(THIS->ctx->dict_pool);
 
@@ -73,7 +73,6 @@ get_new_dict_full()
         return NULL;
     }
 
-    dict->free_pair.key = NULL;
     dict->totkvlen = 0;
     LOCK_INIT(&dict->lock);
 
@@ -273,7 +272,7 @@ done:
     return _gf_false;
 }
 
-void
+static void
 data_destroy(data_t *data)
 {
     if (data) {
@@ -325,7 +324,7 @@ dict_lookup_common(const dict_t *this, const char *key)
     data_pair_t *pair;
 
     for (pair = this->members_list; pair != NULL; pair = pair->next) {
-        if (pair->key && !strcmp(pair->key, key))
+        if (!strcmp(pair->key, key))
             return pair;
     }
 
@@ -362,18 +361,6 @@ dict_set_lk(dict_t *this, char *key, const int key_len, data_t *value,
             gf_boolean_t replace)
 {
     data_pair_t *pair;
-    int key_free = 0;
-    int keylen;
-
-    if (!key) {
-        keylen = gf_asprintf(&key, "ref:%p", value);
-        if (-1 == keylen) {
-            return -1;
-        }
-        key_free = 1;
-    } else {
-        keylen = key_len;
-    }
 
     /* Search for a existing key if 'replace' is asked for */
     if (replace) {
@@ -383,47 +370,23 @@ dict_set_lk(dict_t *this, char *key, const int key_len, data_t *value,
             pair->value = data_ref(value);
             this->totkvlen += (value->len - unref_data->len);
             data_unref(unref_data);
-            if (key_free)
-                GF_FREE(key);
             /* Indicates duplicate key */
             return 0;
         }
     }
 
-    if (this->free_pair.key) { /* the free_pair is used */
-        pair = mem_get(THIS->ctx->dict_pair_pool);
-        if (!pair) {
-            if (key_free)
-                GF_FREE(key);
-            return -1;
-        }
-    } else { /* assign the pair to the free pair */
-        pair = &this->free_pair;
-    }
+    pair = GF_MALLOC(sizeof(data_pair_t) + key_len + 1,
+                     gf_common_mt_data_pair_t);
+    if (caa_unlikely(!pair))
+        return -1;
 
-    if (key_free) {
-        /* It's ours.  Use it. */
-        pair->key = key;
-        key_free = 0;
-    } else {
-        pair->key = (char *)GF_MALLOC(keylen + 1, gf_common_mt_char);
-        if (!pair->key) {
-            if (pair != &this->free_pair) {
-                mem_put(pair);
-            }
-            return -1;
-        }
-        strcpy(pair->key, key);
-    }
     pair->value = data_ref(value);
-    this->totkvlen += (keylen + 1 + value->len);
+    memcpy(pair->key, key, key_len + 1);
+    this->totkvlen += (key_len + 1 + value->len);
 
     pair->next = this->members_list;
     this->members_list = pair;
     this->count++;
-
-    if (key_free)
-        GF_FREE(key);
 
     if (this->max_count < this->count)
         this->max_count = this->count;
@@ -542,12 +505,7 @@ dict_deln(dict_t *this, char *key, const int keylen)
                 this->members_list = pair->next;
 
             this->totkvlen -= (keylen + 1);
-            GF_FREE(pair->key);
-            if (pair == &this->free_pair) {
-                this->free_pair.key = NULL;
-            } else {
-                mem_put(pair);
-            }
+            GF_FREE(pair);
             this->count--;
             rc = _gf_true;
             break;
@@ -573,12 +531,7 @@ dict_clear_data(dict_t *this)
     while (curr != NULL) {
         next = curr->next;
         data_unref(curr->value);
-        GF_FREE(curr->key);
-        if (curr == &this->free_pair) {
-            this->free_pair.key = NULL;
-        } else {
-            mem_put(curr);
-        }
+        GF_FREE(curr);
         curr = next;
     }
     this->count = this->totkvlen = 0;
@@ -629,7 +582,7 @@ dict_destroy(dict_t *this)
 void
 dict_unref(dict_t *this)
 {
-    uint64_t ref = 0;
+    uint32_t ref = 0;
 
     if (!this) {
         gf_msg_callingfn("dict", GF_LOG_DEBUG, EINVAL, LG_MSG_INVALID_ARG,
@@ -659,7 +612,7 @@ dict_ref(dict_t *this)
 void
 data_unref(data_t *this)
 {
-    uint64_t ref;
+    uint32_t ref;
 
     if (!this) {
         gf_msg_callingfn("dict", GF_LOG_WARNING, EINVAL, LG_MSG_INVALID_ARG,
@@ -1801,6 +1754,51 @@ err:
 }
 
 int
+dict_get_int64n(dict_t *this, char *key, const int keylen, int64_t *val)
+{
+    data_t *data = NULL;
+    int ret = 0;
+
+    if (!this || !key || !val) {
+        ret = -EINVAL;
+        goto err;
+    }
+
+    ret = dict_get_with_refn(this, key, &data);
+    if (ret != 0) {
+        goto err;
+    }
+
+    VALIDATE_DATA_AND_LOG(data, GF_DATA_TYPE_INT, key, -EINVAL);
+
+    ret = data_to_int64_ptr(data, val);
+
+err:
+    if (data)
+        data_unref(data);
+    return ret;
+}
+
+int
+dict_set_int64n(dict_t *this, char *key, const int keylen, int64_t val)
+{
+    data_t *data = data_from_int64(val);
+    int ret = 0;
+
+    if (!data) {
+        ret = -EINVAL;
+        goto err;
+    }
+
+    ret = dict_setn(this, key, keylen, data);
+    if (ret < 0)
+        data_destroy(data);
+
+err:
+    return ret;
+}
+
+int
 dict_get_uint16(dict_t *this, char *key, uint16_t *val)
 {
     data_t *data = NULL;
@@ -1976,6 +1974,7 @@ _dict_modify_flag(dict_t *this, char *key, int flag, int op)
     int ret = 0;
     data_pair_t *pair = NULL;
     char *ptr = NULL;
+    size_t keylen;
 
     if (!this || !key) {
         gf_msg_callingfn("dict", GF_LOG_WARNING, EINVAL, LG_MSG_INVALID_ARG,
@@ -2024,28 +2023,19 @@ _dict_modify_flag(dict_t *this, char *key, int flag, int op)
             else
                 BIT_CLEAR((unsigned char *)(data->data), flag);
 
-            if (this->free_pair.key) { /* the free pair is in use */
-                pair = mem_get0(THIS->ctx->dict_pair_pool);
-                if (!pair) {
-                    gf_smsg("dict", GF_LOG_ERROR, ENOMEM, LG_MSG_NO_MEMORY,
-                            "dict pair", NULL);
-                    ret = -ENOMEM;
-                    goto err;
-                }
-            } else { /* use the free pair */
-                pair = &this->free_pair;
-            }
-
-            pair->key = (char *)GF_MALLOC(strlen(key) + 1, gf_common_mt_char);
-            if (!pair->key) {
+            keylen = strlen(key) + 1;  // including terminating NULL char
+            pair = GF_MALLOC(sizeof(data_pair_t) + keylen,
+                             gf_common_mt_data_pair_t);
+            if (caa_unlikely(!pair)) {
                 gf_smsg("dict", GF_LOG_ERROR, ENOMEM, LG_MSG_NO_MEMORY,
                         "dict pair", NULL);
                 ret = -ENOMEM;
                 goto err;
             }
-            strcpy(pair->key, key);
+
             pair->value = data_ref(data);
-            this->totkvlen += (strlen(key) + 1 + data->len);
+            memcpy(pair->key, key, keylen);
+            this->totkvlen += (keylen + data->len);
 
             pair->next = this->members_list;
             this->members_list = pair;
@@ -2063,15 +2053,8 @@ err:
     if (key && this)
         UNLOCK(&this->lock);
 
-    if (pair) {
-        if (pair->key) {
-            GF_FREE(pair->key);
-            pair->key = NULL;
-        }
-        if (pair != &this->free_pair) {
-            mem_put(pair);
-        }
-    }
+    if (pair)
+        GF_FREE(pair);
 
     if (data)
         data_destroy(data);
@@ -2760,22 +2743,14 @@ dict_rename_key(dict_t *this, char *key, char *replace_key)
  *        : failure: -errno
  */
 
-int
+unsigned int
 dict_serialized_length_lk(dict_t *this)
 {
-    int ret = -EINVAL;
-    int count = this->count;
-    const int keyhdrlen = DICT_DATA_HDR_KEY_LEN + DICT_DATA_HDR_VAL_LEN;
+    unsigned int count = this->count;
+    const unsigned int keyhdrlen = DICT_DATA_HDR_KEY_LEN +
+                                   DICT_DATA_HDR_VAL_LEN;
 
-    if (count < 0) {
-        gf_smsg("dict", GF_LOG_ERROR, EINVAL, LG_MSG_COUNT_LESS_THAN_ZERO,
-                "count=%d", count, NULL);
-        goto out;
-    }
-
-    ret = DICT_HDR_LEN + this->totkvlen + (count * keyhdrlen);
-out:
-    return ret;
+    return DICT_HDR_LEN + this->totkvlen + (count * keyhdrlen);
 }
 
 /**
@@ -2795,18 +2770,12 @@ dict_serialize_lk(dict_t *this, char *buf)
 {
     int ret = -1;
     data_pair_t *pair = this->members_list;
-    int32_t count = this->count;
-    int32_t keylen = 0;
-    int32_t netword = 0;
+    uint32_t count = this->count;
+    uint32_t keylen = 0;
+    uint32_t netword = 0;
 
     if (!buf) {
         gf_smsg("dict", GF_LOG_ERROR, EINVAL, LG_MSG_INVALID_ARG, NULL);
-        goto out;
-    }
-
-    if (count < 0) {
-        gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_COUNT_LESS_THAN_ZERO,
-                "count=%d", count, NULL);
         goto out;
     }
 
@@ -2818,11 +2787,6 @@ dict_serialize_lk(dict_t *this, char *buf)
         if (!pair) {
             gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_PAIRS_LESS_THAN_COUNT,
                     NULL);
-            goto out;
-        }
-
-        if (!pair->key) {
-            gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_NULL_PTR, NULL);
             goto out;
         }
 
@@ -2858,8 +2822,6 @@ out:
     return ret;
 }
 
-
-
 /**
  * dict_unserialize - unserialize a buffer into a dict
  *
@@ -2876,7 +2838,7 @@ dict_unserialize(char *orig_buf, int32_t size, dict_t **fill)
 {
     char *buf = orig_buf;
     int ret = -1;
-    int32_t count = 0;
+    uint32_t count = 0;
     int i = 0;
 
     data_t *value = NULL;
@@ -2920,12 +2882,6 @@ dict_unserialize(char *orig_buf, int32_t size, dict_t **fill)
     memcpy(&hostord, buf, sizeof(hostord));
     count = be32toh(hostord);
     buf += DICT_HDR_LEN;
-
-    if (count < 0) {
-        gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_COUNT_LESS_THAN_ZERO,
-                "count=%d", count, NULL);
-        goto out;
-    }
 
     /* count will be set by the dict_set's below */
     (*fill)->count = 0;
@@ -3028,10 +2984,6 @@ dict_allocate_and_serialize(dict_t *this, char **buf, u_int *length)
     LOCK(&this->lock);
     {
         len = dict_serialized_length_lk(this);
-        if (len < 0) {
-            ret = len;
-            goto unlock;
-        }
 
         *buf = GF_MALLOC(len, gf_common_mt_char);
         if (*buf == NULL) {
@@ -3068,26 +3020,15 @@ out:
  * @return    : 0 -> success
  *            : -errno -> failure
  */
-int
+static int
 dict_serialize_value_with_delim_lk(dict_t *this, char *buf, int32_t *serz_len,
                                    char delimiter)
 {
     int ret = -1;
-    int32_t count = this->count;
+    uint32_t count = this->count;
     int32_t vallen = 0;
     int32_t total_len = 0;
     data_pair_t *pair = this->members_list;
-
-    if (!buf) {
-        gf_smsg("dict", GF_LOG_ERROR, EINVAL, LG_MSG_INVALID_ARG, NULL);
-        goto out;
-    }
-
-    if (count < 0) {
-        gf_smsg("dict", GF_LOG_ERROR, EINVAL, LG_MSG_INVALID_ARG, "count=%d",
-                count, NULL);
-        goto out;
-    }
 
     while (count) {
         if (!pair) {
@@ -3096,7 +3037,7 @@ dict_serialize_value_with_delim_lk(dict_t *this, char *buf, int32_t *serz_len,
             goto out;
         }
 
-        if (!pair->key || !pair->value) {
+        if (!pair->value) {
             gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_KEY_OR_VALUE_NULL, NULL);
             goto out;
         }
@@ -3303,7 +3244,7 @@ dict_unserialize_specific_keys(char *orig_buf, int32_t size, dict_t **fill,
 {
     char *buf = orig_buf;
     int ret = -1;
-    int32_t count = 0;
+    uint32_t count = 0;
     int i = 0;
     int j = 0;
 
@@ -3349,12 +3290,6 @@ dict_unserialize_specific_keys(char *orig_buf, int32_t size, dict_t **fill,
     memcpy(&hostord, buf, sizeof(hostord));
     count = be32toh(hostord);
     buf += DICT_HDR_LEN;
-
-    if (count < 0) {
-        gf_smsg("dict", GF_LOG_ERROR, 0, LG_MSG_COUNT_LESS_THAN_ZERO,
-                "count=%d", count, NULL);
-        goto out;
-    }
 
     /* Compute specific key length and save in array */
     for (i = 0; i < totkeycount; i++) {

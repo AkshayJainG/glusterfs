@@ -112,11 +112,11 @@ typedef struct _ios_sample_t {
 } ios_sample_t;
 
 typedef struct _ios_sample_buf_t {
-    uint64_t pos;              /* Position in write buffer */
-    uint64_t size;             /* Size of ring buffer */
-    uint64_t collected;        /* Number of samples we've collected */
-    uint64_t observed;         /* Number of FOPs we've observed */
-    ios_sample_t *ios_samples; /* Our list of samples */
+    uint64_t pos;               /* Position in write buffer */
+    uint64_t size;              /* Size of ring buffer */
+    uint64_t collected;         /* Number of samples we've collected */
+    uint64_t observed;          /* Number of FOPs we've observed */
+    ios_sample_t ios_samples[]; /* Our list of samples */
 } ios_sample_buf_t;
 
 struct ios_lat {
@@ -157,18 +157,19 @@ struct ios_conf {
     gf_boolean_t dump_fd_stats;
     gf_boolean_t count_fop_hits;
     gf_boolean_t measure_latency;
+    gf_boolean_t dump_thread_should_die;
+    gf_boolean_t dump_thread_running;
     struct ios_stat_head list[IOS_STATS_TYPE_MAX];
     struct ios_stat_head thru_list[IOS_STATS_THRU_MAX];
     int32_t ios_dump_interval;
     pthread_t dump_thread;
-    gf_boolean_t dump_thread_should_die;
-    gf_boolean_t dump_thread_running;
     gf_lock_t ios_sampling_lock;
     int32_t ios_sample_interval;
     int32_t ios_sample_buf_size;
     ios_sample_buf_t *ios_sample_buf;
     struct dnscache *dnscache;
     int32_t ios_dnscache_ttl_sec;
+    ios_dump_type_t dump_format;
     /*
      * What we really need here is just a unique value to keep files
      * created by this instance distinct from those created by any other.
@@ -181,7 +182,6 @@ struct ios_conf {
      * all of the cases where "xlator_name" is used as a *variable* name.
      */
     char *unique_id;
-    ios_dump_type_t dump_format;
 };
 
 struct ios_fd {
@@ -305,21 +305,6 @@ is_fop_latency_started(call_frame_t *frame)
         if (flag)                                                              \
             ios_stat_add_to_list(&conf->thru_list[type], throughput, iosstat); \
     } while (0)
-
-static int
-ios_fd_ctx_get(fd_t *fd, xlator_t *this, struct ios_fd **iosfd)
-{
-    uint64_t iosfd64 = 0;
-    unsigned long iosfdlong = 0;
-    int ret = 0;
-
-    ret = fd_ctx_get(fd, this, &iosfd64);
-    iosfdlong = iosfd64;
-    if (ret != -1)
-        *iosfd = (void *)iosfdlong;
-
-    return ret;
-}
 
 static int
 ios_fd_ctx_set(fd_t *fd, xlator_t *this, struct ios_fd *iosfd)
@@ -466,7 +451,6 @@ ios_bump_read(xlator_t *this, fd_t *fd, size_t len)
 
     conf = this->private;
     lb2 = log_base2(len);
-    ios_fd_ctx_get(fd, this, &iosfd);
     if (!conf)
         return;
 
@@ -475,6 +459,7 @@ ios_bump_read(xlator_t *this, fd_t *fd, size_t len)
     GF_ATOMIC_INC(conf->cumulative.block_count_read[lb2]);
     GF_ATOMIC_INC(conf->incremental.block_count_read[lb2]);
 
+    iosfd = fd_ctx_get_ptr(fd, this);
     if (iosfd) {
         GF_ATOMIC_ADD(iosfd->data_read, len);
         GF_ATOMIC_INC(iosfd->block_count_read[lb2]);
@@ -490,7 +475,6 @@ ios_bump_write(xlator_t *this, fd_t *fd, size_t len)
 
     conf = this->private;
     lb2 = log_base2(len);
-    ios_fd_ctx_get(fd, this, &iosfd);
     if (!conf)
         return;
 
@@ -499,6 +483,7 @@ ios_bump_write(xlator_t *this, fd_t *fd, size_t len)
     GF_ATOMIC_INC(conf->cumulative.block_count_write[lb2]);
     GF_ATOMIC_INC(conf->incremental.block_count_write[lb2]);
 
+    iosfd = fd_ctx_get_ptr(fd, this);
     if (iosfd) {
         GF_ATOMIC_ADD(iosfd->data_written, len);
         GF_ATOMIC_INC(iosfd->block_count_write[lb2]);
@@ -569,39 +554,27 @@ ios_inode_ctx_get(inode_t *inode, xlator_t *this, struct ios_stat **iosstat)
  * in our dump thread.
  *
  */
-ios_sample_buf_t *
+static ios_sample_buf_t *
 ios_create_sample_buf(size_t buf_size)
 {
     ios_sample_buf_t *ios_sample_buf = NULL;
-    ios_sample_t *ios_samples = NULL;
 
-    ios_sample_buf = GF_CALLOC(1, sizeof(*ios_sample_buf),
-                               gf_io_stats_mt_ios_sample_buf);
+    ios_sample_buf = GF_CALLOC(
+        1, sizeof(*ios_sample_buf) + (buf_size * sizeof(ios_sample_t)),
+        gf_io_stats_mt_ios_sample_buf);
     if (!ios_sample_buf)
         goto err;
 
-    ios_samples = GF_CALLOC(buf_size, sizeof(*ios_samples),
-                            gf_io_stats_mt_ios_sample);
-
-    if (!ios_samples)
-        goto err;
-
-    ios_sample_buf->ios_samples = ios_samples;
     ios_sample_buf->size = buf_size;
-    ios_sample_buf->pos = 0;
-    ios_sample_buf->observed = 0;
-    ios_sample_buf->collected = 0;
 
     return ios_sample_buf;
 err:
-    GF_FREE(ios_sample_buf);
     return NULL;
 }
 
-void
+static void
 ios_destroy_sample_buf(ios_sample_buf_t *ios_sample_buf)
 {
-    GF_FREE(ios_sample_buf->ios_samples);
     GF_FREE(ios_sample_buf);
 }
 
@@ -666,7 +639,7 @@ ios_dump_file_stats(struct ios_stat_head *list_head, xlator_t *this,
     return 0;
 }
 
-int
+static int
 ios_dump_throughput_stats(struct ios_stat_head *list_head, xlator_t *this,
                           FILE *logfp, ios_stats_thru_t type)
 {
@@ -676,12 +649,16 @@ ios_dump_throughput_stats(struct ios_stat_head *list_head, xlator_t *this,
     };
     glusterfs_ctx_t *ctx = this->ctx;
 
+    if (ctx == NULL)
+        return 0;
+
     LOCK(&list_head->lock);
     {
         list_for_each_entry(entry, &list_head->iosstats->list, list)
         {
             gf_time_fmt_tv_FT(timestr, sizeof timestr,
-                              &entry->iosstat->thru_counters[type].time, ctx);
+                              &entry->iosstat->thru_counters[type].time,
+                              &ctx->log);
 
             ios_log(this, logfp, "%s \t %-10.2f  \t  %s", timestr, entry->value,
                     entry->iosstat->filename);
@@ -1053,7 +1030,7 @@ err:
  *          FAILURE: NULL
  */
 static struct dnscache_entry *
-gf_dnscache_entry_init()
+gf_dnscache_entry_init(void)
 {
     struct dnscache_entry *entry = GF_CALLOC(1, sizeof(*entry),
                                              gf_common_mt_dnscache_entry);
@@ -1287,7 +1264,7 @@ out:
     return ret;
 }
 
-int
+static int
 io_stats_dump_global_to_logfp(xlator_t *this, struct ios_global_stats *stats,
                               time_t now, int interval, FILE *logfp)
 {
@@ -1305,8 +1282,13 @@ io_stats_dump_global_to_logfp(xlator_t *this, struct ios_global_stats *stats,
     uint64_t fop_hits = 0;
     uint64_t block_count_read = 0;
     uint64_t block_count_write = 0;
+    glusterfs_ctx_t *ctx;
 
     conf = this->private;
+    ctx = this->ctx;
+
+    if (ctx == NULL)
+        return 0;
 
     if (interval == -1)
         ios_log(this, logfp, "\n=== Cumulative stats ===");
@@ -1406,7 +1388,7 @@ io_stats_dump_global_to_logfp(xlator_t *this, struct ios_global_stats *stats,
         LOCK(&conf->lock);
         {
             gf_time_fmt_tv_FT(timestr, sizeof timestr,
-                              &conf->cumulative.max_openfd_time, this->ctx);
+                              &conf->cumulative.max_openfd_time, &ctx->log);
             ios_log(this, logfp,
                     "Current open fd's: %" PRId64 " Max open fd's: %" PRId64
                     " time %s",
@@ -1861,7 +1843,7 @@ update_ios_latency(struct ios_conf *conf, call_frame_t *frame,
     return 0;
 }
 
-int32_t
+static int32_t
 io_stats_dump_stats_to_dict(xlator_t *this, dict_t *resp,
                             ios_stats_type_t flags, int32_t list_cnt)
 {
@@ -1877,8 +1859,13 @@ io_stats_dump_stats_to_dict(xlator_t *this, dict_t *resp,
         0,
     };
     char *dict_timestr = NULL;
+    glusterfs_ctx_t *ctx;
 
     conf = this->private;
+    ctx = this->ctx;
+
+    if (ctx == NULL)
+        goto out;
 
     switch (flags) {
         case IOS_STATS_TYPE_OPEN:
@@ -1893,7 +1880,7 @@ io_stats_dump_stats_to_dict(xlator_t *this, dict_t *resp,
                                       conf->cumulative.max_nr_opens);
 
                 gf_time_fmt_tv_FT(timestr, sizeof timestr,
-                                  &conf->cumulative.max_openfd_time, this->ctx);
+                                  &conf->cumulative.max_openfd_time, &ctx->log);
 
                 dict_timestr = gf_strdup(timestr);
                 if (!dict_timestr)
@@ -3550,7 +3537,7 @@ io_stats_release(xlator_t *this, fd_t *fd)
         UNLOCK(&conf->lock);
     }
 
-    ios_fd_ctx_get(fd, this, &iosfd);
+    iosfd = fd_ctx_get_ptr(fd, this);
     if (iosfd) {
         io_stats_dump_fd(this, iosfd);
 
@@ -3632,32 +3619,42 @@ ios_destroy_top_stats(struct ios_conf *conf)
         list_head = &conf->list[i];
         if (!list_head)
             continue;
-        list_for_each_entry_safe(entry, tmp, &list_head->iosstats->list, list)
+        LOCK(&list_head->lock);
         {
-            list = entry;
-            stat = list->iosstat;
-            ios_stat_unref(stat);
-            list_del(&list->list);
-            GF_FREE(list);
-            list_head->members--;
+            list_for_each_entry_safe(entry, tmp, &list_head->iosstats->list,
+                                     list)
+            {
+                list = entry;
+                stat = list->iosstat;
+                ios_stat_unref(stat);
+                list_del(&list->list);
+                GF_FREE(list);
+                list_head->members--;
+            }
+            GF_FREE(list_head->iosstats);
         }
-        GF_FREE(list_head->iosstats);
+        UNLOCK(&list_head->lock);
     }
 
     for (i = 0; i < IOS_STATS_THRU_MAX; i++) {
         list_head = &conf->thru_list[i];
         if (!list_head)
             continue;
-        list_for_each_entry_safe(entry, tmp, &list_head->iosstats->list, list)
+        LOCK(&list_head->lock);
         {
-            list = entry;
-            stat = list->iosstat;
-            ios_stat_unref(stat);
-            list_del(&list->list);
-            GF_FREE(list);
-            list_head->members--;
+            list_for_each_entry_safe(entry, tmp, &list_head->iosstats->list,
+                                     list)
+            {
+                list = entry;
+                stat = list->iosstat;
+                ios_stat_unref(stat);
+                list_del(&list->list);
+                GF_FREE(list);
+                list_head->members--;
+            }
+            GF_FREE(list_head->iosstats);
         }
-        GF_FREE(list_head->iosstats);
+        UNLOCK(&list_head->lock);
     }
 
     UNLOCK(&conf->lock);
@@ -3757,7 +3754,7 @@ ios_set_log_format_code(struct ios_conf *conf, char *dump_format_str)
         conf->dump_format = IOS_DUMP_TYPE_SAMPLES;
 }
 
-void
+static void
 xlator_set_loglevel(xlator_t *this, int log_level)
 {
     glusterfs_ctx_t *ctx = NULL;
@@ -3925,11 +3922,11 @@ reconfigure(xlator_t *this, dict_t *options)
     }
 
     GF_OPTION_RECONF("log-buf-size", log_buf_size, options, uint32, out);
-    gf_log_set_log_buf_size(log_buf_size);
+    gf_log_set_log_buf_size(this->ctx, log_buf_size);
 
     GF_OPTION_RECONF("log-flush-timeout", log_flush_timeout, options, time,
                      out);
-    gf_log_set_log_flush_timeout(log_flush_timeout);
+    gf_log_set_log_flush_timeout(this->ctx, log_flush_timeout);
 
     GF_OPTION_RECONF("threads", threads, options, int32, out);
     gf_async_adjust_threads(threads);
@@ -4159,10 +4156,10 @@ init(xlator_t *this)
     }
 
     GF_OPTION_INIT("log-buf-size", log_buf_size, uint32, out);
-    gf_log_set_log_buf_size(log_buf_size);
+    gf_log_set_log_buf_size(this->ctx, log_buf_size);
 
     GF_OPTION_INIT("log-flush-timeout", log_flush_timeout, time, out);
-    gf_log_set_log_flush_timeout(log_flush_timeout);
+    gf_log_set_log_flush_timeout(this->ctx, log_flush_timeout);
 
     GF_OPTION_INIT("threads", threads, int32, out);
     gf_async_adjust_threads(threads);

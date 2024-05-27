@@ -267,10 +267,6 @@ int32_t
 rpc_transport_get_peeraddr(rpc_transport_t *this, char *peeraddr, int addrlen,
                            struct sockaddr_storage *sa, size_t salen);
 
-int32_t
-rpc_transport_get_myaddr(rpc_transport_t *this, char *peeraddr, int addrlen,
-                         struct sockaddr_storage *sa, size_t salen);
-
 int
 rpc_transport_throttle(rpc_transport_t *this, gf_boolean_t onoff);
 
@@ -287,7 +283,7 @@ rpc_transport_keepalive_options_set(dict_t *options, int32_t interval,
 
 int
 rpc_transport_unix_options_build(dict_t *options, char *filepath,
-                                 int frame_timeout);
+                                 time_t frame_timeout);
 
 int
 rpc_transport_inet_options_build(dict_t *options, const char *hostname,

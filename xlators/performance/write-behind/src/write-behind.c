@@ -55,10 +55,10 @@ typedef struct wb_inode {
                                which arrive later (which overlap, etc.)
                                are issued only after their dependencies
                                in this list are "fulfilled".
-
+ 
                                Server acks for entries in this list
                                shrinks the window.
-
+ 
                                The sum total of all req->write_size
                                of entries in this list must be kept less
                                than the permitted window size.
@@ -92,14 +92,14 @@ typedef struct wb_inode {
                                     the current 'state' of liability. Every
                                     new addition to the liability list bumps
                                     the generation number.
-
+               
                                     a newly arrived request is only required
                                     to perform causal checks against the entries
                                     in the liability list which were present
                                     at the time of its addition. the generation
                                     number at the time of its addition is stored
                                     in the request and used during checks.
-
+               
                                     the liability list can grow while the request
                                     waits in the todo list waiting for its
                                     dependent operations to complete. however
@@ -149,18 +149,16 @@ typedef struct wb_request {
     int op_ret;
     int op_errno;
 
-    int32_t refcount;
     wb_inode_t *wb_inode;
     glusterfs_fop_t fop;
     gf_lkowner_t lk_owner;
     pid_t client_pid;
+    int32_t refcount;
     struct iobref *iobref;
     uint64_t gen; /* inode liability state at the time of
                      request arrival */
 
     fd_t *fd;
-    int wind_count; /* number of sync-attempts. Only
-                       for debug purposes */
     struct {
         size_t size; /* 0 size == till infinity */
         off_t off;
@@ -177,6 +175,8 @@ typedef struct wb_request {
      */
     uint64_t unique;
     uuid_t gfid;
+    int wind_count; /* number of sync-attempts. Only
+                       for debug purposes */
 } wb_request_t;
 
 typedef struct wb_conf {
@@ -2770,9 +2770,7 @@ wb_forget(xlator_t *this, inode_t *inode)
 int
 wb_release(xlator_t *this, fd_t *fd)
 {
-    uint64_t tmp = 0;
-
-    (void)fd_ctx_del(fd, this, &tmp);
+    (void)fd_ctx_del(fd, this);
 
     return 0;
 }

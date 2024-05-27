@@ -578,8 +578,8 @@ gf_fuse_fill_dirent(gf_dirent_t *entry, struct fuse_dirent *fde,
         fde->ino = entry->d_ino;
 
     fde->off = entry->d_off;
-    fde->type = entry->d_type;
     fde->namelen = entry->d_len;
+    fde->type = entry->d_type;
     (void)memcpy(fde->name, entry->d_name, fde->namelen);
 }
 
@@ -670,10 +670,12 @@ fuse_ignore_xattr_set(fuse_private_t *priv, char *key)
           (fnmatch("*.glusterfs.volume-mark", key, FNM_PERIOD) == 0) ||
           (fnmatch("*.glusterfs.volume-mark.*", key, FNM_PERIOD) == 0) ||
           (fnmatch("system.posix_acl_access", key, FNM_PERIOD) == 0) ||
+          (fnmatch("system.posix_acl_default", key, FNM_PERIOD) == 0) ||
           (fnmatch("glusterfs.gfid.newfile", key, FNM_PERIOD) == 0) ||
           (fnmatch("*.glusterfs.shard.block-size", key, FNM_PERIOD) == 0) ||
           (fnmatch("*.glusterfs.lockinfo", key, FNM_PERIOD) == 0) ||
-          (fnmatch("*.glusterfs.shard.file-size", key, FNM_PERIOD) == 0)))
+          (fnmatch("*.glusterfs.shard.file-size", key, FNM_PERIOD) == 0) ||
+          (fnmatch("trusted.SGI_*", key, FNM_PERIOD) == 0)))
         ret = -1;
 
 out:

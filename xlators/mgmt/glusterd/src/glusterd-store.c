@@ -332,20 +332,11 @@ gd_store_brick_snap_details_write(int fd, glusterd_brickinfo_t *brickinfo)
 {
     int ret = -1;
     xlator_t *this = THIS;
-    glusterd_conf_t *conf = NULL;
     char value[5 * PATH_MAX];
     uint total_len = 0;
 
-    conf = this->private;
-    GF_VALIDATE_OR_GOTO(this->name, (conf != NULL), out);
-
     GF_VALIDATE_OR_GOTO(this->name, (fd > 0), out);
     GF_VALIDATE_OR_GOTO(this->name, (brickinfo != NULL), out);
-
-    if (conf->op_version < GD_OP_VERSION_3_6_0) {
-        ret = 0;
-        goto out;
-    }
 
     if (brickinfo->origin_path[0] != '\0') {
         ret = snprintf(value + total_len, sizeof(value) - total_len, "%s=%s\n",
@@ -733,22 +724,13 @@ glusterd_volume_write_snap_details(int fd, glusterd_volinfo_t *volinfo)
 {
     int ret = -1;
     xlator_t *this = THIS;
-    glusterd_conf_t *conf = NULL;
     char buf[PATH_MAX] = {
         0,
     };
     uint total_len = 0;
 
-    conf = this->private;
-    GF_VALIDATE_OR_GOTO(this->name, (conf != NULL), out);
-
     GF_VALIDATE_OR_GOTO(this->name, (fd > 0), out);
     GF_VALIDATE_OR_GOTO(this->name, (volinfo != NULL), out);
-
-    if (conf->op_version < GD_OP_VERSION_3_6_0) {
-        ret = 0;
-        goto out;
-    }
 
     ret = snprintf(buf, sizeof(buf), "%s=%s\n%s=%s\n%s=%" PRIu64 "\n",
                    GLUSTERD_STORE_KEY_PARENT_VOLNAME, volinfo->parent_volname,
@@ -848,7 +830,7 @@ glusterd_volume_exclude_options_write(int fd, glusterd_volinfo_t *volinfo)
         total_len += ret;
     }
 
-    if ((conf->op_version >= GD_OP_VERSION_3_7_6) && volinfo->arbiter_count) {
+    if (volinfo->arbiter_count) {
         ret = snprintf(buf + total_len, sizeof(buf) - total_len, "%s=%d\n",
                        GLUSTERD_STORE_KEY_VOL_ARBITER_CNT,
                        volinfo->arbiter_count);
@@ -859,17 +841,15 @@ glusterd_volume_exclude_options_write(int fd, glusterd_volinfo_t *volinfo)
         total_len += ret;
     }
 
-    if (conf->op_version >= GD_OP_VERSION_3_6_0) {
-        ret = snprintf(
-            buf + total_len, sizeof(buf) - total_len, "%s=%d\n%s=%d\n",
-            GLUSTERD_STORE_KEY_VOL_DISPERSE_CNT, volinfo->disperse_count,
-            GLUSTERD_STORE_KEY_VOL_REDUNDANCY_CNT, volinfo->redundancy_count);
-        if (ret < 0 || ret >= sizeof(buf) - total_len) {
-            ret = -1;
-            goto out;
-        }
-        total_len += ret;
+    ret = snprintf(buf + total_len, sizeof(buf) - total_len, "%s=%d\n%s=%d\n",
+                   GLUSTERD_STORE_KEY_VOL_DISPERSE_CNT, volinfo->disperse_count,
+                   GLUSTERD_STORE_KEY_VOL_REDUNDANCY_CNT,
+                   volinfo->redundancy_count);
+    if (ret < 0 || ret >= sizeof(buf) - total_len) {
+        ret = -1;
+        goto out;
     }
+    total_len += ret;
 
     ret = snprintf(buf + total_len, sizeof(buf) - total_len,
                    "%s=%d\n%s=%d\n%s=%s\n", GLUSTERD_STORE_KEY_VOL_VERSION,
@@ -914,16 +894,15 @@ glusterd_volume_exclude_options_write(int fd, glusterd_volinfo_t *volinfo)
     }
     total_len += ret;
 
-    if (conf->op_version >= GD_OP_VERSION_3_7_6) {
-        ret = snprintf(buf + total_len, sizeof(buf) - total_len, "%s=%d\n",
-                       GLUSTERD_STORE_KEY_VOL_QUOTA_VERSION,
-                       volinfo->quota_xattr_version);
-        if (ret < 0 || ret >= sizeof(buf) - total_len) {
-            ret = -1;
-            goto out;
-        }
-        total_len += ret;
+    ret = snprintf(buf + total_len, sizeof(buf) - total_len, "%s=%d\n",
+                   GLUSTERD_STORE_KEY_VOL_QUOTA_VERSION,
+                   volinfo->quota_xattr_version);
+    if (ret < 0 || ret >= sizeof(buf) - total_len) {
+        ret = -1;
+        goto out;
     }
+    total_len += ret;
+
     if (conf->op_version >= GD_OP_VERSION_3_10_0) {
         ret = snprintf(buf + total_len, sizeof(buf) - total_len, "%s=0\n",
                        GF_TIER_ENABLED);
@@ -1270,7 +1249,7 @@ glusterd_store_create_quota_conf_sh_on_absence(glusterd_volinfo_t *volinfo)
 }
 
 static int32_t
-glusterd_store_create_missed_snaps_list_shandle_on_absence()
+glusterd_store_create_missed_snaps_list_shandle_on_absence(void)
 {
     char missed_snaps_list[PATH_MAX] = "";
     int32_t ret = -1;
@@ -2233,7 +2212,7 @@ out:
 }
 
 int32_t
-glusterd_retrieve_uuid()
+glusterd_retrieve_uuid(void)
 {
     char *uuid_str = NULL;
     int32_t ret = -1;
@@ -2303,11 +2282,6 @@ glusterd_store_retrieve_snapd(glusterd_volinfo_t *volinfo)
 
     conf = this->private;
     GF_ASSERT(volinfo);
-
-    if (conf->op_version < GD_OP_VERSION_3_6_0) {
-        ret = 0;
-        goto out;
-    }
 
     /*
      * This is needed for upgrade situations. Say a volume is created with
@@ -4214,7 +4188,7 @@ out:
 /* Adds the missed snap entries to the in-memory conf->missed_snap_list *
  * and writes them to disk */
 int32_t
-glusterd_store_update_missed_snaps()
+glusterd_store_update_missed_snaps(void)
 {
     int32_t fd = -1;
     int32_t ret = -1;
@@ -4350,7 +4324,7 @@ glusterd_store_peerinfo_dirpath_set(char *path, size_t len)
 }
 
 int32_t
-glusterd_store_create_peer_dir()
+glusterd_store_create_peer_dir(void)
 {
     int32_t ret = 0;
     char path[PATH_MAX];
@@ -4898,7 +4872,7 @@ out:
 }
 
 int32_t
-glusterd_restore()
+glusterd_restore(void)
 {
     int32_t ret = -1;
     xlator_t *this = THIS;
@@ -5073,47 +5047,25 @@ out:
 int32_t
 glusterd_quota_conf_write_header(int fd)
 {
-    int header_len = 0;
-    int ret = -1;
-    xlator_t *this = THIS;
-    glusterd_conf_t *conf = NULL;
+    int header_len = SLEN(QUOTA_CONF_HEADER);
+    int ret;
 
-    conf = this->private;
-    GF_VALIDATE_OR_GOTO(this->name, conf, out);
-
-    if (conf->op_version < GD_OP_VERSION_3_7_0) {
-        header_len = SLEN(QUOTA_CONF_HEADER_1_1);
-        ret = gf_nwrite(fd, QUOTA_CONF_HEADER_1_1, header_len);
-    } else {
-        header_len = SLEN(QUOTA_CONF_HEADER);
-        ret = gf_nwrite(fd, QUOTA_CONF_HEADER, header_len);
-    }
+    ret = gf_nwrite(fd, QUOTA_CONF_HEADER, header_len);
 
     if (ret != header_len) {
-        ret = -1;
-        goto out;
-    }
-
-    ret = 0;
-
-out:
-    if (ret < 0)
         gf_msg_callingfn("quota", GF_LOG_ERROR, 0, GD_MSG_QUOTA_CONF_WRITE_FAIL,
                          "failed to write "
                          "header to a quota conf");
+        return -1;
+    }
 
-    return ret;
+    return 0;
 }
 
 int32_t
 glusterd_quota_conf_write_gfid(int fd, void *buf, char type)
 {
-    int ret = -1;
-    xlator_t *this = THIS;
-    glusterd_conf_t *conf = NULL;
-
-    conf = this->private;
-    GF_VALIDATE_OR_GOTO(this->name, conf, out);
+    int ret;
 
     ret = gf_nwrite(fd, buf, 16);
     if (ret != 16) {
@@ -5121,12 +5073,10 @@ glusterd_quota_conf_write_gfid(int fd, void *buf, char type)
         goto out;
     }
 
-    if (conf->op_version >= GD_OP_VERSION_3_7_0) {
-        ret = gf_nwrite(fd, &type, 1);
-        if (ret != 1) {
-            ret = -1;
-            goto out;
-        }
+    ret = gf_nwrite(fd, &type, 1);
+    if (ret != 1) {
+        ret = -1;
+        goto out;
     }
 
     ret = 0;

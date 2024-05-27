@@ -34,7 +34,6 @@
 /* Namespace synchronization */
 #define DHT_ENTRY_SYNC_DOMAIN "dht.entry.sync"
 #define DHT_LAYOUT_HASH_INVALID 1
-#define MAX_REBAL_THREADS sysconf(_SC_NPROCESSORS_ONLN)
 
 #define DHT_DIR_STAT_BLOCKS 8
 #define DHT_DIR_STAT_SIZE 4096
@@ -107,8 +106,8 @@ typedef struct dht_layout dht_layout_t;
 struct dht_stat_time {
     uint64_t atime;
     uint32_t atime_nsec;
-    uint64_t ctime;
     uint32_t ctime_nsec;
+    uint64_t ctime;
     uint64_t mtime;
     uint32_t mtime_nsec;
 };
@@ -346,6 +345,8 @@ struct dht_local {
     off_t queue_offset;
     int32_t queue;
 
+    int32_t mds_heal_fresh_lookup;
+
     /* inodelks during filerename for backward compatibility */
     dht_lock_t **rename_inodelk_backward_compatible;
 
@@ -360,7 +361,6 @@ struct dht_local {
     int rename_inodelk_bc_count;
     /* This is use only for directory operation */
     int32_t valid;
-    int32_t mds_heal_fresh_lookup;
     short lock_type;
     char need_selfheal;
     char need_xattr_heal;
@@ -539,8 +539,6 @@ struct dht_conf {
     subvol_nodeuuids_info_t *local_nodeuuids;
     int32_t local_subvols_cnt;
 
-    int dthrottle;
-
     /* Hard link handle requirement for migration triggered from client*/
     synclock_t link_lock;
 
@@ -570,6 +568,8 @@ struct dht_conf {
     gf_boolean_t force_migration;
 
     gf_boolean_t lookup_optimize;
+
+    gf_boolean_t rmdir_optimize;
 
     gf_boolean_t unhashed_sticky_bit;
 
@@ -929,6 +929,10 @@ dht_create(call_frame_t *frame, xlator_t *this, loc_t *loc, int32_t flags,
 int32_t
 dht_open(call_frame_t *frame, xlator_t *this, loc_t *loc, int32_t flags,
          fd_t *fd, dict_t *xdata);
+
+int32_t
+dht_seek(call_frame_t *frame, xlator_t *this, fd_t *fd, off_t offset,
+         gf_seek_what_t what, dict_t *xdata);
 
 int32_t
 dht_readv(call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
@@ -1339,4 +1343,8 @@ dht_dir_layout_error_check(xlator_t *this, inode_t *inode);
 
 int
 dht_inode_ctx_mdsvol_set(inode_t *inode, xlator_t *this, xlator_t *mds_subvol);
+
+int
+dht_seek_cbk(call_frame_t *frame, void *cookie, xlator_t *this, int op_ret,
+             int op_errno, off_t offset, dict_t *xdata);
 #endif /* _DHT_H */

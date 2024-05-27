@@ -131,7 +131,6 @@ cluster_xattrop_cbk
 copy_opts_to_child
 create_frame
 data_copy
-data_destroy
 data_from_dynptr
 data_from_int32
 data_from_uint64
@@ -450,7 +449,6 @@ fd_bind
 fd_close
 fd_create
 fd_create_uint64
-__fd_ctx_del
 fd_ctx_del
 fd_ctx_dump
 __fd_ctx_get
@@ -654,6 +652,7 @@ __gf_realloc
 _gf_ref_get
 _gf_ref_init
 _gf_ref_put
+gf_rebalance_thread_count
 gf_rev_dns_lookup
 gf_rsync_strong_checksum
 gf_rsync_md5_checksum
@@ -769,10 +768,8 @@ __inode_ctx_set1
 inode_ctx_set1
 __inode_ctx_set2
 inode_ctx_set2
-inode_ctx_size
 inode_dump
 inode_dump_to_dict
-__inode_find
 inode_find
 inode_find_directory_name
 inode_forget
@@ -795,15 +792,12 @@ inode_ref_reduce_by_n
 inode_rename
 inode_resolve
 inode_set_namespace_inode
-inode_set_need_lookup
-inode_table_ctx_free
 inode_table_destroy
 inode_table_destroy_all
 inode_table_dump
 inode_table_dump_to_dict
 inode_table_new
 inode_table_with_invalidator
-__inode_table_set_lru_limit
 inode_table_set_lru_limit
 inode_unlink
 inode_unref
@@ -1088,7 +1082,7 @@ xlator_foreach
 xlator_foreach_depth_first
 xlator_init
 xlator_mem_acct_init
-xlator_mem_acct_unref
+xlator_mem_acct_destroy
 xlator_notify
 xlator_option_info_list
 xlator_option_init_bool

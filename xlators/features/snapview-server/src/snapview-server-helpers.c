@@ -160,17 +160,12 @@ svs_fd_t *
 __svs_fd_ctx_get(xlator_t *this, fd_t *fd)
 {
     svs_fd_t *svs_fd = NULL;
-    uint64_t value = 0;
-    int ret = -1;
 
-    GF_VALIDATE_OR_GOTO("snapview-server", this, out);
-    GF_VALIDATE_OR_GOTO(this->name, fd, out);
-
-    ret = __fd_ctx_get(fd, this, &value);
-    if (ret)
-        return NULL;
-
-    svs_fd = (svs_fd_t *)((long)value);
+    svs_fd = __fd_ctx_get_ptr(fd, this);
+    if (!svs_fd) {
+        GF_VALIDATE_OR_GOTO("snapview-server", this, out);
+        GF_VALIDATE_OR_GOTO(this->name, fd, out);
+    }
 
 out:
     return svs_fd;
@@ -394,9 +389,6 @@ out:
 void
 svs_iatt_fill(uuid_t gfid, struct iatt *buf)
 {
-    struct timespec ts = {
-        0,
-    };
     xlator_t *this = NULL;
 
     this = THIS;
@@ -417,9 +409,12 @@ svs_iatt_fill(uuid_t gfid, struct iatt *buf)
 
     buf->ia_prot = ia_prot_from_st_mode(0755);
 
-    timespec_now_realtime(&ts);
-    buf->ia_mtime = buf->ia_atime = buf->ia_ctime = ts.tv_sec;
-    buf->ia_mtime_nsec = buf->ia_atime_nsec = buf->ia_ctime_nsec = ts.tv_nsec;
+    /* TODO: it would be better to use real times, but they need to be stable
+     *       once created (i.e. mtime should only change when an entry has
+     *       been added or removed for example. Otherwise the returned time
+     *       should always be the same). */
+    buf->ia_mtime = buf->ia_atime = buf->ia_ctime = 0;
+    buf->ia_mtime_nsec = buf->ia_atime_nsec = buf->ia_ctime_nsec = 0;
 out:
     return;
 }

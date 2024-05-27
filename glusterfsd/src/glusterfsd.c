@@ -197,6 +197,9 @@ static struct argp_option gf_options[] = {
     {"lru-limit", ARGP_FUSE_LRU_LIMIT_KEY, "N", 0,
      "Set fuse module's limit for number of inodes kept in LRU list to N "
      "[default: 65536]"},
+    {"inode-table-size", ARGP_FUSE_INODE_TABLESIZE_KEY, "N", 0,
+     "Set the inode hash table size to N - this must be a power of 2 and "
+     "will be rounded up if not [default: 65536]"},
     {"invalidate-limit", ARGP_FUSE_INVALIDATE_LIMIT_KEY, "N", 0,
      "Suspend inode invalidations implied by 'lru-limit' if the number of "
      "outstanding invalidations reaches N"},
@@ -248,6 +251,8 @@ static struct argp_option gf_options[] = {
     {"fuse-flush-handle-interrupt", ARGP_FUSE_FLUSH_HANDLE_INTERRUPT_KEY,
      "BOOL", OPTION_ARG_OPTIONAL | OPTION_HIDDEN,
      "handle interrupt in fuse FLUSH handler"},
+    {"fuse-setlk-handle-interrupt", ARGP_FUSE_SETLK_HANDLE_INTERRUPT_KEY,
+     "BOOL", OPTION_ARG_OPTIONAL, "handle interrupt in fuse SETLK handler"},
     {"auto-invalidation", ARGP_FUSE_AUTO_INVAL_KEY, "BOOL", OPTION_ARG_OPTIONAL,
      "controls whether fuse-kernel can auto-invalidate "
      "attribute, dentry and page-cache. "
@@ -263,6 +268,9 @@ static struct argp_option gf_options[] = {
     {"brick-mux", ARGP_BRICK_MUX_KEY, 0, 0, "Enable brick mux. "},
     {"io-engine", ARGP_IO_ENGINE_KEY, "ENGINE", OPTION_ARG_OPTIONAL,
      "force utilization of the given I/O ENGINE"},
+    {"fuse-handle-copy_file_range", ARGP_FUSE_HANDLE_COPY_FILE_RANGE, "BOOL",
+     OPTION_ARG_OPTIONAL | OPTION_HIDDEN,
+     "enable the handler of the FUSE_COPY_FILE_RANGE message"},
     {0, 0, 0, 0, "Miscellaneous Options:"},
     {
         0,
@@ -430,6 +438,11 @@ set_fuse_mount_options(glusterfs_ctx_t *ctx, dict_t *options)
                      cmd_args->lru_limit, glusterfsd_msg_3);
     }
 
+    if (cmd_args->inode_table_size >= 0) {
+        DICT_SET_VAL(dict_set_int32_sizen, options, "inode-table-size",
+                     cmd_args->inode_table_size, glusterfsd_msg_3);
+    }
+
     if (cmd_args->invalidate_limit >= 0) {
         DICT_SET_VAL(dict_set_int32_sizen, options, "invalidate-limit",
                      cmd_args->invalidate_limit, glusterfsd_msg_3);
@@ -538,6 +551,20 @@ set_fuse_mount_options(glusterfs_ctx_t *ctx, dict_t *options)
         DICT_SET_VAL(dict_set_uint32, options, "fuse-dev-eperm-ratelimit-ns",
                      cmd_args->fuse_dev_eperm_ratelimit_ns, glusterfsd_msg_3);
     }
+    switch (cmd_args->fuse_handle_copy_file_range) {
+        case GF_OPTION_ENABLE:
+            DICT_SET_VAL(dict_set_static_ptr, options, "handle-copy_file_range",
+                         "on", glusterfsd_msg_3);
+            break;
+        case GF_OPTION_DISABLE:
+            DICT_SET_VAL(dict_set_static_ptr, options, "handle-copy_file_range",
+                         "off", glusterfsd_msg_3);
+            break;
+        default:
+            gf_msg_debug("glusterfsd", 0, "fuse-handle-copy_file_range mode %d",
+                         cmd_args->fuse_handle_copy_file_range);
+            break;
+    }
 
     if (cmd_args->fs_display_name) {
         DICT_SET_VAL(dict_set_dynstr, options, "fs-display-name",
@@ -547,6 +574,32 @@ set_fuse_mount_options(glusterfs_ctx_t *ctx, dict_t *options)
     if (cmd_args->io_engine != NULL) {
         DICT_SET_VAL(dict_set_static_ptr, options, "io-engine",
                      cmd_args->io_engine, glusterfsd_msg_3);
+    }
+
+    switch (cmd_args->fuse_setlk_handle_interrupt) {
+        case GF_OPTION_ENABLE:
+            ret = dict_set_static_ptr(options, "setlk-handle-interrupt", "on");
+            if (ret < 0) {
+                gf_msg("glusterfsd", GF_LOG_ERROR, 0, glusterfsd_msg_4,
+                       "failed to set dict value for key "
+                       "setlk-handle-interrupt");
+                goto err;
+            }
+            break;
+        case GF_OPTION_DISABLE:
+            ret = dict_set_static_ptr(options, "setlk-handle-interrupt", "off");
+            if (ret < 0) {
+                gf_msg("glusterfsd", GF_LOG_ERROR, 0, glusterfsd_msg_4,
+                       "failed to set dict value for key "
+                       "setlk-handle-interrupt");
+                goto err;
+            }
+            break;
+        case GF_OPTION_DEFERRED: /* default */
+        default:
+            gf_msg_debug("glusterfsd", 0, "fuse-setlk-handle-interrupt mode %d",
+                         cmd_args->fuse_setlk_handle_interrupt);
+            break;
     }
 
     ret = 0;
@@ -1085,10 +1138,6 @@ parse_opts(int key, char *arg, struct argp_state *state)
 
             break;
 
-        case ARGP_GLOBAL_TIMER_WHEEL:
-            cmd_args->global_timer_wheel = 1;
-            break;
-
         case ARGP_GID_TIMEOUT_KEY:
             if (!gf_string2int(arg, &cmd_args->gid_timeout)) {
                 cmd_args->gid_timeout_set = _gf_true;
@@ -1107,6 +1156,14 @@ parse_opts(int key, char *arg, struct argp_state *state)
                 break;
 
             argp_failure(state, -1, 0, "unknown LRU limit option %s", arg);
+            break;
+
+        case ARGP_FUSE_INODE_TABLESIZE_KEY:
+            if (!gf_string2int32(arg, &cmd_args->inode_table_size))
+                break;
+
+            argp_failure(state, -1, 0, "unknown inode table size option %s",
+                         arg);
             break;
 
         case ARGP_FUSE_INVALIDATE_LIMIT_KEY:
@@ -1377,6 +1434,35 @@ parse_opts(int key, char *arg, struct argp_state *state)
                              "io-engine");
             }
             break;
+
+        case ARGP_FUSE_SETLK_HANDLE_INTERRUPT_KEY:
+            if (!arg)
+                arg = "yes";
+
+            if (gf_string2boolean(arg, &b) == 0) {
+                cmd_args->fuse_setlk_handle_interrupt = b;
+
+                break;
+            }
+
+            argp_failure(state, -1, 0,
+                         "unknown fuse setlk handle interrupt setting \"%s\"",
+                         arg);
+            break;
+        case ARGP_FUSE_HANDLE_COPY_FILE_RANGE:
+            if (!arg)
+                arg = "yes";
+
+            if (gf_string2boolean(arg, &b) == 0) {
+                cmd_args->fuse_handle_copy_file_range = b;
+
+                break;
+            }
+
+            argp_failure(state, -1, 0,
+                         "unknown fuse handle copy_file_range setting \"%s\"",
+                         arg);
+            break;
     }
     return 0;
 }
@@ -1482,6 +1568,146 @@ cleanup_and_exit(int signum)
     }
 }
 
+static FILE *
+get_volfp(glusterfs_ctx_t *ctx)
+{
+    cmd_args_t *cmd_args = NULL;
+    FILE *specfp = NULL;
+
+    cmd_args = &ctx->cmd_args;
+
+    if ((specfp = fopen(cmd_args->volfile, "r")) == NULL) {
+        gf_smsg("glusterfsd", GF_LOG_ERROR, errno, glusterfsd_msg_9,
+                "volume_file=%s", cmd_args->volfile, NULL);
+        return NULL;
+    }
+
+    gf_msg_debug("glusterfsd", 0, "loading volume file %s", cmd_args->volfile);
+
+    return specfp;
+}
+
+static int
+volfile_init(glusterfs_ctx_t *ctx)
+{
+    int ret = -1;
+    char *volfile = NULL;
+    gf_volfile_t *volfile_obj = NULL;
+    gf_volfile_t *volfile_tmp = NULL;
+    struct stat stbuf = {
+        0,
+    };
+    char sha256_hash[SHA256_DIGEST_LENGTH] = {
+        0,
+    };
+
+    cmd_args_t *cmd_args = &ctx->cmd_args;
+    FILE *fp = get_volfp(ctx);
+    if (!fp) {
+        gf_smsg("glusterfsd", GF_LOG_ERROR, 0, glusterfsd_msg_28, NULL);
+        goto out;
+    }
+    ret = sys_stat(cmd_args->volfile, &stbuf);
+    if (IS_ERROR(ret)) {
+        gf_smsg("glusterfsd", GF_LOG_ERROR, errno, glusterfsd_msg_9,
+                "volume_file=%s", cmd_args->volfile, NULL);
+        goto out;
+    }
+
+    volfile = GF_MALLOC(stbuf.st_size, gf_common_mt_char);
+    if (!volfile) {
+        gf_smsg("glusterfsd", GF_LOG_ERROR, ENOMEM, glusterfsd_msg_9,
+                "volume_file=%s", cmd_args->volfile, NULL);
+        ret = -1;
+        goto out;
+    }
+    ret = fread(volfile, stbuf.st_size, 1, fp);
+    if (IS_ERROR(ret)) {
+        gf_smsg("glusterfsd", GF_LOG_ERROR, errno, glusterfsd_msg_9,
+                "volume_file=%s", cmd_args->volfile, NULL);
+        goto out;
+    }
+    glusterfs_compute_sha256((const unsigned char *)volfile, stbuf.st_size,
+                             sha256_hash);
+    LOCK(&ctx->volfile_lock);
+    {
+        list_for_each_entry(volfile_obj, &ctx->volfile_list, volfile_list)
+        {
+            if (!memcmp(sha256_hash, volfile_obj->volfile_checksum,
+                        sizeof(volfile_obj->volfile_checksum))) {
+                UNLOCK(&ctx->volfile_lock);
+                ret = 0;
+                gf_smsg(THIS->name, GF_LOG_INFO, 0, glusterfsd_msg_40, NULL);
+                goto out;
+            }
+            volfile_tmp = volfile_obj;
+            break;
+        }
+    }
+    UNLOCK(&ctx->volfile_lock);
+
+    /*  Check if only options have changed. No need to reload the
+     *  volfile if topology hasn't changed.
+     *  glusterfs_volfile_reconfigure returns 3 possible return states
+     *  return 0          =======> reconfiguration of options has succeeded
+     *  return 1          =======> the graph has to be reconstructed and all
+     * the xlators should be inited return -1(or -ve) =======> Some Internal
+     * Error occurred during the operation
+     */
+
+    if (volfile_tmp) {
+        ret = glusterfs_volfile_reconfigure(fp, ctx);
+        if (ret == 0) {
+            gf_msg_debug("glusterfsd-mgmt", 0,
+                         "No need to re-load volfile, reconfigure done");
+            memcpy(volfile_tmp->volfile_checksum, sha256_hash,
+                   sizeof(volfile_tmp->volfile_checksum));
+            goto out;
+        } else {
+            gf_msg("glusterfsd-mgmt", GF_LOG_INFO, 0, 0,
+                   "reconfigure failed, continuing with init");
+        }
+    } else {
+        gf_msg("glusterfsd-mgmt", GF_LOG_INFO, 0, 0,
+               "volume not found, continuing with init");
+    }
+
+    ret = glusterfs_process_volfp(ctx, fp);
+    fp = NULL; /* this is freed inside the function (both success & failure) */
+    if (ret)
+        goto out;
+
+    LOCK(&ctx->volfile_lock);
+    {
+        if (!volfile_tmp) {
+            volfile_tmp = GF_CALLOC(1, sizeof(gf_volfile_t),
+                                    gf_common_volfile_t);
+            if (!volfile_tmp) {
+                ret = -1;
+                goto out;
+            }
+
+            INIT_LIST_HEAD(&volfile_tmp->volfile_list);
+            volfile_tmp->graph = ctx->active;
+            list_add(&volfile_tmp->volfile_list, &ctx->volfile_list);
+            snprintf(volfile_tmp->vol_id, sizeof(volfile_tmp->vol_id), "%s",
+                     cmd_args->volfile_id);
+        }
+        memcpy(volfile_tmp->volfile_checksum, sha256_hash,
+               sizeof(volfile_tmp->volfile_checksum));
+    }
+    UNLOCK(&ctx->volfile_lock);
+
+    ret = 0;
+out:
+    if (fp)
+        fclose(fp);
+
+    if (volfile)
+        GF_FREE(volfile);
+    return ret;
+}
+
 static void
 reincarnate(int signum)
 {
@@ -1497,6 +1723,8 @@ reincarnate(int signum)
     if (cmd_args->volfile_server) {
         gf_smsg("glusterfsd", GF_LOG_INFO, 0, glusterfsd_msg_11, NULL);
         ret = glusterfs_volfile_fetch(ctx);
+    } else {
+        ret = volfile_init(ctx);
     }
 
     /* Also, SIGHUP should do logrotate */
@@ -1504,6 +1732,10 @@ reincarnate(int signum)
 
     if (ret < 0)
         gf_smsg("glusterfsd", GF_LOG_ERROR, 0, glusterfsd_msg_12, NULL);
+
+    /* Notify all xlators */
+    if (ctx->active)
+        xlator_notify(ctx->active->top, GF_EVENT_SIGHUP, NULL);
 
     return;
 }
@@ -1614,11 +1846,6 @@ glusterfs_ctx_defaults_init(glusterfs_ctx_t *ctx)
     if (!ctx->dict_pool)
         goto out;
 
-    ctx->dict_pair_pool = mem_pool_new(data_pair_t,
-                                       GF_MEMPOOL_COUNT_OF_DATA_PAIR_T);
-    if (!ctx->dict_pair_pool)
-        goto out;
-
     ctx->dict_data_pool = mem_pool_new(data_t, GF_MEMPOOL_COUNT_OF_DATA_T);
     if (!ctx->dict_data_pool)
         goto out;
@@ -1658,6 +1885,7 @@ glusterfs_ctx_defaults_init(glusterfs_ctx_t *ctx)
     cmd_args->fopen_keep_cache = GF_OPTION_DEFERRED;
     cmd_args->kernel_writeback_cache = GF_OPTION_DEFERRED;
     cmd_args->fuse_flush_handle_interrupt = GF_OPTION_DEFERRED;
+    cmd_args->fuse_setlk_handle_interrupt = GF_OPTION_DEFERRED;
 
     if (ctx->mem_acct_enable)
         cmd_args->mem_acct = 1;
@@ -1688,7 +1916,6 @@ out:
         GF_FREE(ctx->pool);
         mem_pool_destroy(ctx->dict_pool);
         mem_pool_destroy(ctx->dict_data_pool);
-        mem_pool_destroy(ctx->dict_pair_pool);
         mem_pool_destroy(ctx->logbuf_pool);
     }
 
@@ -1759,17 +1986,17 @@ logging_init(glusterfs_ctx_t *ctx, const char *progpath)
     }
 
     /* finish log set parameters before init */
-    gf_log_set_loglevel(ctx, cmd_args->log_level);
+    ctx->log.loglevel = cmd_args->log_level;
 
-    gf_log_set_localtime(cmd_args->localtime_logging);
+    ctx->log.localtime = cmd_args->localtime_logging;
 
-    gf_log_set_logger(cmd_args->logger);
+    ctx->log.logger = cmd_args->logger;
 
-    gf_log_set_logformat(cmd_args->log_format);
+    ctx->log.logformat = cmd_args->log_format;
 
-    gf_log_set_log_buf_size(cmd_args->log_buf_size);
+    gf_log_set_log_buf_size(ctx, cmd_args->log_buf_size);
 
-    gf_log_set_log_flush_timeout(cmd_args->log_flush_timeout);
+    ctx->log.timeout = cmd_args->log_flush_timeout;
 
     if (gf_log_init(ctx, cmd_args->log_file, cmd_args->log_ident) == -1) {
         fprintf(stderr, "ERROR: failed to open logfile %s\n",
@@ -2532,29 +2759,9 @@ out:
     return ret;
 }
 
-static FILE *
-get_volfp(glusterfs_ctx_t *ctx)
-{
-    cmd_args_t *cmd_args = NULL;
-    FILE *specfp = NULL;
-
-    cmd_args = &ctx->cmd_args;
-
-    if ((specfp = fopen(cmd_args->volfile, "r")) == NULL) {
-        gf_smsg("glusterfsd", GF_LOG_ERROR, errno, glusterfsd_msg_9,
-                "volume_file=%s", cmd_args->volfile, NULL);
-        return NULL;
-    }
-
-    gf_msg_debug("glusterfsd", 0, "loading volume file %s", cmd_args->volfile);
-
-    return specfp;
-}
-
 static int
 glusterfs_volumes_init(glusterfs_ctx_t *ctx)
 {
-    FILE *fp = NULL;
     cmd_args_t *cmd_args = NULL;
     int ret = 0;
 
@@ -2572,18 +2779,7 @@ glusterfs_volumes_init(glusterfs_ctx_t *ctx)
         return ret;
     }
 
-    fp = get_volfp(ctx);
-
-    if (!fp) {
-        gf_smsg("glusterfsd", GF_LOG_ERROR, 0, glusterfsd_msg_28, NULL);
-        ret = -1;
-        goto out;
-    }
-
-    ret = glusterfs_process_volfp(ctx, fp);
-    if (ret)
-        goto out;
-
+    ret = volfile_init(ctx);
 out:
     emancipate(ctx, ret);
     return ret;

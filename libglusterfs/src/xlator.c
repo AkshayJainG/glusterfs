@@ -192,6 +192,11 @@ xlator_volopt_dynload(char *xlator_type, void **dl_handle,
 
     GF_VALIDATE_OR_GOTO("xlator", xlator_type, out);
 
+#ifndef BUILD_GNFS
+    if (strcmp(xlator_type, "nfs/server") == 0)
+        return -1;
+#endif /* BUILD_GNFS */
+
     /* socket.so doesn't fall under the default xlator directory, hence we
      * need this check */
     if (!strstr(xlator_type, "rpc-transport"))
@@ -716,9 +721,6 @@ xlator_notify(xlator_t *xl, int event, void *data, ...)
 int
 xlator_mem_acct_init(xlator_t *xl, int num_types)
 {
-    int i = 0;
-    int ret = 0;
-
     if (!xl)
         return -1;
 
@@ -728,8 +730,8 @@ xlator_mem_acct_init(xlator_t *xl, int num_types)
     if (!xl->ctx->mem_acct_enable)
         return 0;
 
-    xl->mem_acct = MALLOC(sizeof(struct mem_acct) +
-                          sizeof(struct mem_acct_rec) * num_types);
+    xl->mem_acct = CALLOC(
+        1, sizeof(struct mem_acct) + sizeof(struct mem_acct_rec) * num_types);
 
     if (!xl->mem_acct) {
         return -1;
@@ -738,33 +740,31 @@ xlator_mem_acct_init(xlator_t *xl, int num_types)
     xl->mem_acct->num_types = num_types;
     GF_ATOMIC_INIT(xl->mem_acct->refcnt, 1);
 
-    for (i = 0; i < num_types; i++) {
-        memset(&xl->mem_acct->rec[i], 0, sizeof(struct mem_acct_rec));
 #ifdef DEBUG
-        INIT_LIST_HEAD(&(xl->mem_acct->rec[i].obj_list));
-        ret = LOCK_INIT(&(xl->mem_acct->rec[i].lock));
-        if (ret) {
+    struct mem_acct_rec *rec = NULL;
+    int i;
+    for (i = 0; i < num_types; i++) {
+        rec = &xl->mem_acct->rec[i];
+        if (LOCK_INIT(&rec->lock) != 0) {
             fprintf(stderr, "Unable to lock..errno : %d", errno);
         }
-#endif
+        INIT_LIST_HEAD(&rec->obj_list);
     }
+#endif /* DEBUG */
 
     return 0;
 }
 
 void
-xlator_mem_acct_unref(struct mem_acct *mem_acct)
+xlator_mem_acct_destroy(struct mem_acct *mem_acct)
 {
-    uint32_t i;
-
-    if (GF_ATOMIC_DEC(mem_acct->refcnt) == 0) {
 #ifdef DEBUG
-        for (i = 0; i < mem_acct->num_types; i++) {
-            LOCK_DESTROY(&(mem_acct->rec[i].lock));
-        }
-#endif
-        FREE(mem_acct);
+    uint32_t i;
+    for (i = 0; i < mem_acct->num_types; i++) {
+        LOCK_DESTROY(&(mem_acct->rec[i].lock));
     }
+#endif
+    FREE(mem_acct);
 }
 
 void
@@ -805,8 +805,8 @@ xlator_memrec_free(xlator_t *xl)
     }
     mem_acct = xl->mem_acct;
 
-    if (mem_acct) {
-        xlator_mem_acct_unref(mem_acct);
+    if (mem_acct && (GF_ATOMIC_DEC(mem_acct->refcnt) == 0)) {
+        xlator_mem_acct_destroy(mem_acct);
         xl->mem_acct = NULL;
     }
 
@@ -1002,6 +1002,21 @@ xlator_mem_cleanup(xlator_t *this)
         prev = this;
         graph = ctx->active;
         pthread_mutex_lock(&graph->mutex);
+        /* TODO: is this the best way to do this ?
+         *       On a brick-mux process, it's possible that the brick we are
+         *       removing is actually the first loaded brick. In this case,
+         *       top->next will point to one of the xlators being removed. To
+         *       avoid issues when top->next is used in other places, we need
+         *       to change that pointer, but what's the best value ?
+         *       If there are other bricks, which one "deserves" being the
+         *       "next" ?
+         *       Is there any real benefit for having a "next" pointer ? if
+         *       not, probably it would be better to set it to NULL during
+         *       initialization (at list when brick-mux is enabled), or even
+         *       completely get rid of it. */
+        if (top->next == this) {
+            top->next = NULL;
+        }
         while (prev) {
             trav = prev->next;
             GF_FREE(prev);
@@ -1287,7 +1302,10 @@ is_gf_log_command(xlator_t *this, const char *name, char *value, size_t size)
     int ret = -1;
     int log_level = -1;
     gf_boolean_t syslog_flag = 0;
-    glusterfs_ctx_t *ctx = NULL;
+    glusterfs_ctx_t *ctx = this->ctx;
+
+    if (!ctx)
+        goto out;
 
     if (!strcmp("trusted.glusterfs.syslog", name)) {
         ret = gf_bin_to_string(key, sizeof(key), value, size);
@@ -1300,9 +1318,9 @@ is_gf_log_command(xlator_t *this, const char *name, char *value, size_t size)
             goto out;
         }
         if (syslog_flag)
-            gf_log_enable_syslog();
+            gf_log_enable_syslog(ctx);
         else
-            gf_log_disable_syslog();
+            gf_log_disable_syslog(ctx);
 
         goto out;
     }
@@ -1326,7 +1344,7 @@ is_gf_log_command(xlator_t *this, const char *name, char *value, size_t size)
         gf_smsg("glusterfs", gf_log_get_loglevel(), 0, LG_MSG_SET_LOG_LEVEL,
                 "new-value=%d", log_level, "old-value=%d",
                 gf_log_get_loglevel(), NULL);
-        gf_log_set_loglevel(this->ctx, log_level);
+        gf_log_set_loglevel(ctx, log_level);
         ret = 0;
         goto out;
     }
@@ -1341,9 +1359,6 @@ is_gf_log_command(xlator_t *this, const char *name, char *value, size_t size)
         goto out;
     }
 
-    ctx = this->ctx;
-    if (!ctx)
-        goto out;
     if (!ctx->active)
         goto out;
     trav = ctx->active->top;
@@ -1366,28 +1381,24 @@ out:
 int
 glusterd_check_log_level(const char *value)
 {
-    int log_level = -1;
-
     if (!strcasecmp(value, "CRITICAL")) {
-        log_level = GF_LOG_CRITICAL;
+        return GF_LOG_CRITICAL;
     } else if (!strcasecmp(value, "ERROR")) {
-        log_level = GF_LOG_ERROR;
+        return GF_LOG_ERROR;
     } else if (!strcasecmp(value, "WARNING")) {
-        log_level = GF_LOG_WARNING;
+        return GF_LOG_WARNING;
     } else if (!strcasecmp(value, "INFO")) {
-        log_level = GF_LOG_INFO;
+        return GF_LOG_INFO;
     } else if (!strcasecmp(value, "DEBUG")) {
-        log_level = GF_LOG_DEBUG;
+        return GF_LOG_DEBUG;
     } else if (!strcasecmp(value, "TRACE")) {
-        log_level = GF_LOG_TRACE;
+        return GF_LOG_TRACE;
     } else if (!strcasecmp(value, "NONE")) {
-        log_level = GF_LOG_NONE;
+        return GF_LOG_NONE;
     }
 
-    if (log_level == -1)
-        gf_smsg(THIS->name, GF_LOG_ERROR, 0, LG_MSG_INVALID_INIT, NULL);
-
-    return log_level;
+    gf_smsg(THIS->name, GF_LOG_ERROR, 0, LG_MSG_INVALID_INIT, NULL);
+    return -1;
 }
 
 int

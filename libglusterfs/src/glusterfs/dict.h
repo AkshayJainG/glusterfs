@@ -14,6 +14,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 
+#include "config.h"
 #include "glusterfs/common-utils.h"
 
 typedef struct _data data_t;
@@ -41,6 +42,12 @@ typedef struct _data_pair data_pair_t;
 
 #define dict_set_int32_sizen(this, key, val)                                   \
     dict_set_int32n(this, key, SLEN(key), val)
+
+#define dict_get_int64_sizen(this, key, val)                                   \
+    dict_get_int64n(this, key, SLEN(key), val)
+
+#define dict_set_int64_sizen(this, key, val)                                   \
+    dict_set_int64n(this, key, SLEN(key), val)
 
 #define GF_PROTOCOL_DICT_SERIALIZE(this, from_dict, to, len, ope, labl)        \
     do {                                                                       \
@@ -88,7 +95,7 @@ typedef struct _data_pair data_pair_t;
 
 struct _data {
     char *data;
-    gf_atomic_t refcount;
+    gf_atomic_uint32_t refcount;
     gf_dict_data_type_t data_type;
     uint32_t len;
     uint32_t is_static;
@@ -97,18 +104,17 @@ struct _data {
 struct _data_pair {
     struct _data_pair *next;
     data_t *value;
-    char *key;
+    char key[];
 };
 
 struct _dict {
     uint64_t max_count;
-    int32_t count;
+    uint32_t count;
     /* Variable to store total keylen + value->len */
     uint32_t totkvlen;
     gf_atomic_t refcount;
     gf_lock_t lock;
     data_pair_t *members_list;
-    data_pair_t free_pair;
     char *extra_stdfree;
 };
 
@@ -116,8 +122,6 @@ typedef gf_boolean_t (*dict_match_t)(dict_t *d, char *k, data_t *v, void *data);
 
 int32_t
 is_data_equal(data_t *one, data_t *two);
-void
-data_destroy(data_t *data);
 
 /* function to set a key/value pair (overwrite existing if matches the key */
 int32_t
@@ -126,7 +130,7 @@ dict_setn(dict_t *this, char *key, const int keylen, data_t *value);
 static inline int32_t
 dict_set(dict_t *this, char *key, data_t *value)
 {
-    return dict_setn(this, key, key ? strlen(key) : 0, value);
+    return dict_setn(this, key, strlen(key), value);
 }
 
 /* function to set a new key/value pair (without checking for duplicate) */
@@ -172,7 +176,6 @@ dict_reset(dict_t *dict);
 
 int
 dict_key_count(dict_t *this);
-
 
 int32_t
 dict_unserialize(char *buf, int32_t size, dict_t **fill);
@@ -313,7 +316,11 @@ dict_set_int32n(dict_t *this, char *key, const int keylen, int32_t val);
 GF_MUST_CHECK int
 dict_get_int64(dict_t *this, char *key, int64_t *val);
 GF_MUST_CHECK int
+dict_get_int64n(dict_t *this, char *key, const int keylen, int64_t *val);
+GF_MUST_CHECK int
 dict_set_int64(dict_t *this, char *key, int64_t val);
+GF_MUST_CHECK int
+dict_set_int64n(dict_t *this, char *key, const int keylen, int64_t val);
 
 GF_MUST_CHECK int
 dict_get_uint16(dict_t *this, char *key, uint16_t *val);
@@ -331,17 +338,17 @@ GF_MUST_CHECK int
 dict_set_uint64(dict_t *this, char *key, uint64_t val);
 
 /* POSIX-compliant systems requires the 'time_t' to be a signed integer. */
-#if __WORDSIZE == 64
+#if SIZEOF_TIME_T == 8
 #define dict_get_time(dict, key, val) dict_get_int64((dict), (key), (val))
 #define dict_set_time(dict, key, val) dict_set_int64((dict), (key), (val))
-#elif __WORDSIZE == 32
+#elif SIZEOF_TIME_T == 4
 #define dict_get_time(dict, key, val)                                          \
     dict_get_int32((dict), (key), ((int32_t *)(val)))
 #define dict_set_time(dict, key, val)                                          \
     dict_set_int32((dict), (key), ((int32_t)(val)))
 #else
-#error "unknown word size"
-#endif /* WORDSIZE check */
+#error "unknown time_t size"
+#endif /* SIZEOF_TIME_T check */
 
 GF_MUST_CHECK int
 dict_check_flag(dict_t *this, char *key, int flag);
@@ -459,7 +466,7 @@ are_dicts_equal(dict_t *one, dict_t *two,
 int
 dict_has_key_from_array(dict_t *dict, char **strings, gf_boolean_t *result);
 
-int
+unsigned int
 dict_serialized_length_lk(dict_t *this);
 
 int32_t
